@@ -1,0 +1,3 @@
+[submodule "testbench-adi-fork"]
+	path = testbench-adi-fork
+	url = git@github.com:Cold-Ion-Group/testbench-adi-fork.git
