@@ -47,6 +47,7 @@ component.xml
 xgui
 *.runs
 *.srcs
+*.sim
 *.sdk
 .Xil
 *_INFO.txt
@@ -63,6 +64,7 @@ db
 *.qws
 *.sof
 *.rbf
+*.wcfg
 system_qsys_script.tcl
 hc_output
 hps_isw_handoff
