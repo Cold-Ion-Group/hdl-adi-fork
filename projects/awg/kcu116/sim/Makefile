@@ -33,8 +33,15 @@ DDS_SOURCES := \
 	$(COMMON_DIR)/ad_dds.v \
 	ad_mul_sim.v
 
+# System testbench sources
+SYSTEM_TB_SOURCES := \
+	axi4_lite_master_bfm.v \
+	ddr4_simple_model.v \
+	ad9144_jesd_model.v \
+	system_top_tb.v
+
 # Targets
-.PHONY: all clean cordic dds help wave analyze
+.PHONY: all clean cordic dds system help wave analyze
 
 all: help
 
@@ -46,8 +53,10 @@ help:
 	@echo "Targets:"
 	@echo "  cordic      - Run CORDIC sine/cosine unit test"
 	@echo "  dds         - Run DDS testbench"
+	@echo "  system      - Run system-level testbench"
 	@echo "  wave-cordic - View CORDIC waveforms"
 	@echo "  wave-dds    - View DDS waveforms"
+	@echo "  wave-system - View system testbench waveforms"
 	@echo "  analyze     - Analyze DDS output (requires Python)"
 	@echo "  clean       - Remove generated files"
 	@echo "  help        - Show this help"
@@ -55,6 +64,7 @@ help:
 	@echo "Examples:"
 	@echo "  make cordic      # Run CORDIC test"
 	@echo "  make dds         # Run DDS test"
+	@echo "  make system      # Run system-level test"
 	@echo "  make analyze     # Analyze DDS output"
 	@echo ""
 	@echo "=========================================="
@@ -98,6 +108,25 @@ wave-cordic: cordic_sine_tb.vcd
 
 wave-dds: ad_dds_cordic_tb.vcd
 	$(GTKWAVE) ad_dds_cordic_tb.vcd &
+
+wave-system: system_top_tb.vcd
+	$(GTKWAVE) system_top_tb.vcd &
+
+# System-level testbench
+system: system_top_tb.vvp
+	@echo "====================================="
+	@echo "Running System-Level Testbench"
+	@echo "====================================="
+	$(VVP) system_top_tb.vvp
+	@echo ""
+	@echo "To view waveforms: make wave-system"
+	@echo "====================================="
+
+system_top_tb.vvp: $(SYSTEM_TB_SOURCES)
+	@echo "Compiling system testbench..."
+	$(IVERILOG) $(IVERILOG_FLAGS) $(TIMEOUT) \
+		-o $@ \
+		$(SYSTEM_TB_SOURCES)
 
 # Analyze DDS output
 analyze: dds_output.txt

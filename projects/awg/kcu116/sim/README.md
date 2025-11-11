@@ -1,22 +1,73 @@
 # AWG KCU116 Simulation Environment
 
-This directory contains simulation testbenches for the KCU116 AWG project, focusing on testing the CORDIC-based DDS (Direct Digital Synthesis) implementation.
+This directory contains comprehensive simulation testbenches for the KCU116 AWG project, including both **unit tests** (CORDIC/DDS) and **system-level integration tests**.
 
 ## Overview
 
-The AWG (Arbitrary Waveform Generator) project uses CORDIC (COordinate Rotation DIgital Computer) algorithms to generate sine and cosine waveforms for the AD9144 DAC. This simulation environment allows you to test and verify the CORDIC implementation independently.
+The AWG (Arbitrary Waveform Generator) project uses CORDIC (COordinate Rotation DIgital Computer) algorithms to generate sine and cosine waveforms for the AD9144 DAC. This simulation environment provides:
+
+1. **Unit Tests** - CORDIC and DDS component testing
+2. **System Tests** - End-to-end integration verification
+
+## Quick Start
+
+### System-Level Test (Recommended)
+
+For complete end-to-end integration testing:
+
+```bash
+# Run full system testbench
+make system
+
+# Or use the runner script
+./run_system_tb.sh
+
+# View waveforms
+make wave-system
+```
+
+See **[SYSTEM_TB_README.md](SYSTEM_TB_README.md)** for complete system testbench documentation.
+
+### Unit Tests
+
+For component-level testing:
+
+```bash
+# Run CORDIC test
+make cordic
+
+# Run DDS test
+make dds
+
+# Analyze DDS output
+make analyze
+```
 
 ## Directory Structure
 
 ```
 sim/
-├── Makefile                  # Build automation
-├── README.md                # This file
-├── ad_dds_cordic_tb.v       # DDS testbench
-├── cordic_sine_tb.v         # CORDIC unit test
-├── run_dds_tb.sh            # Script to run DDS test
-├── run_cordic_tb.sh         # Script to run CORDIC test
-└── analyze_dds.py           # Python script for output analysis
+├── Makefile                     # Build automation for all tests
+├── README.md                   # This file
+├── SYSTEM_TB_README.md         # System testbench documentation
+├── SYSTEM_TESTBENCH_PLAN.md    # Detailed test plan
+├── TEST_VERIFICATION_REPORT.md # Unit test results
+│
+├── Unit Tests:
+│   ├── ad_dds_cordic_tb.v      # DDS testbench
+│   ├── cordic_sine_tb.v        # CORDIC unit test
+│   ├── ad_mul_sim.v            # Multiplier simulation model
+│   ├── run_dds_tb.sh           # Script to run DDS test
+│   ├── run_cordic_tb.sh        # Script to run CORDIC test
+│   └── analyze_dds.py          # Python script for output analysis
+│
+└── System Tests:
+    ├── system_top_tb.v         # Main system testbench
+    ├── axi4_lite_master_bfm.v  # AXI4-Lite bus functional model
+    ├── ddr4_simple_model.v     # DDR4 memory model
+    ├── ad9144_jesd_model.v     # JESD204B receiver model
+    ├── test_sequences.vh       # Register addresses and definitions
+    └── run_system_tb.sh        # System test runner script
 ```
 
 ## Prerequisites
@@ -43,6 +94,30 @@ sim/
 - **Vivado Simulator** (xsim) - If you have Xilinx Vivado installed
 
 ## Quick Start
+
+### System-Level Integration Test
+
+For complete end-to-end testing from register access to JESD link:
+
+```bash
+make system
+```
+
+Or using the shell script:
+```bash
+chmod +x run_system_tb.sh
+./run_system_tb.sh
+```
+
+**What it tests:**
+- AXI4-Lite register access to all peripherals
+- JESD204B link initialization (WAIT → CGS → ILAS → DATA)
+- Transport layer (DDS) configuration
+- System integration and data flow
+
+**See:** [SYSTEM_TB_README.md](SYSTEM_TB_README.md) for complete documentation
+
+---
 
 ### 1. Run CORDIC Unit Test
 
@@ -270,11 +345,27 @@ end
 
 ### Integration with System-Level Tests
 
-These unit tests can be integrated into larger system-level testbenches that include:
-- JESD204 link layer
-- DAC FIFO
-- AXI interconnect
-- Full system_top
+✅ **System-level integration testbench now available!**
+
+The `system_top_tb.v` testbench integrates multiple components including:
+- JESD204B link layer (with behavioral model)
+- AXI4-Lite register interface
+- Transport layer (DDS configuration)
+- Full system integration testing
+
+See [SYSTEM_TB_README.md](SYSTEM_TB_README.md) for details.
+
+## Test Coverage Summary
+
+| Test Level | Testbench | Status | Coverage |
+|------------|-----------|--------|----------|
+| **Unit Test** | `cordic_sine_tb.v` | ✅ PASS | CORDIC algorithm (0-360°) |
+| **Unit Test** | `ad_dds_cordic_tb.v` | ✅ PASS | DDS dual-tone generation |
+| **System Test** | `system_top_tb.v` | ✅ PASS | AXI, JESD link, integration |
+
+**Total Tests**: 3  
+**Passed**: 3  
+**Failed**: 0  
 
 ## References
 
