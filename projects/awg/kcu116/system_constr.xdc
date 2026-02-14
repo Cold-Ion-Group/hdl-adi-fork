@@ -11,7 +11,7 @@ set_property -dict {PACKAGE_PIN AD20 IOSTANDARD LVDS DIFF_TERM_ADV TERM_100} [ge
 set_property -dict {PACKAGE_PIN AE20 IOSTANDARD LVDS DIFF_TERM_ADV TERM_100} [get_ports tx_sysref_n]
 
 
-#cs 2 is for clock, cs 1 is for dac.
+# SPI Chip Selects: CS[0]=AD9516 clock (AA19), CS[1]=AD9144 DAC (AB20)
 set_property -dict {PACKAGE_PIN AA19 IOSTANDARD LVCMOS18} [get_ports spi_csn_clk]
 set_property -dict {PACKAGE_PIN AB20 IOSTANDARD LVCMOS18} [get_ports spi_csn_dac]
 
@@ -34,6 +34,7 @@ set_property -dict {PACKAGE_PIN AE16 IOSTANDARD LVCMOS18} [get_ports {dac_ctrl[1
 # clocks
 
 
+# FMC refclk (GBTCLK0)
 set_property -dict {PACKAGE_PIN K7} [get_ports tx_ref_clk_p]
 set_property -dict {PACKAGE_PIN K6} [get_ports tx_ref_clk_n]
 
@@ -58,7 +59,14 @@ set_property -dict {PACKAGE_PIN B7} [get_ports {tx_data_p[0]}]
 ####################################################################################
 
 
-create_clock -period 2.000 -name tx_ref_clk -waveform {0.000 1.000} -add [get_ports tx_ref_clk_p]
+set tx_refclk_mhz 122.88
+if {[info exists ::env(AWG_TX_REFCLK_MHZ)]} {
+  set tx_refclk_mhz $::env(AWG_TX_REFCLK_MHZ)
+}
+set tx_refclk_period [expr {1000.0 / $tx_refclk_mhz}]
+set tx_refclk_half_period [expr {$tx_refclk_period / 2.0}]
+create_clock -period $tx_refclk_period -name tx_ref_clk \
+  -waveform [list 0.000 $tx_refclk_half_period] -add [get_ports tx_ref_clk_p]
 set_case_analysis 0 [get_pins -quiet -hier {*_channel/TXSYSCLKSEL[0]}]
 set_case_analysis 0 [get_pins -quiet -hier {*_channel/TXSYSCLKSEL[1]}]
 set_case_analysis 0 [get_pins -quiet -hier {*_channel/TXOUTCLKSEL[0]}]
