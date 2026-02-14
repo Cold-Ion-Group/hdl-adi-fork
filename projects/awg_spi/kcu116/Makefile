@@ -5,6 +5,7 @@
 PROJECT_NAME := awg_kcu116
 # TODO: removed spi as its not required at this stage 
 M_DEPS += ../common/awg_spi.v 
+M_DEPS += ../common/jesd_sysref_sync.v
 M_DEPS += ../common/awg_bd.tcl
 M_DEPS += ../common/config.tcl
 

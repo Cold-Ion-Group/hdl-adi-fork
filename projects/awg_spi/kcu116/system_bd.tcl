@@ -18,6 +18,7 @@ set dac_fifo_address_width 14
 
 source $ad_hdl_dir/projects/common/kcu116/kcu116_system_bd.tcl
 source $ad_hdl_dir/projects/common/xilinx/dacfifo_bd.tcl
+add_files -norecurse ../common/jesd_sysref_sync.v
 source ../common/awg_bd.tcl
 source $ad_hdl_dir/projects/scripts/adi_pd.tcl
 
