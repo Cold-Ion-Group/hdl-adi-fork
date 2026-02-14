@@ -8,6 +8,26 @@ source ../common/config.tcl
 # other case use the default value
 #
 
+# Defaults for AWG transceiver clocking (override via environment)
+if {![info exists ::env(AWG_TX_REFCLK_MHZ)]} {
+  set env(AWG_TX_REFCLK_MHZ) 122.88
+}
+if {![info exists ::env(AWG_QPLL_ENABLE)]} {
+  set env(AWG_QPLL_ENABLE) 1
+}
+if {![info exists ::env(AWG_QPLL_REFCLK_DIV)]} {
+  set env(AWG_QPLL_REFCLK_DIV) 1
+}
+if {![info exists ::env(AWG_QPLL_FBDIV)]} {
+  set env(AWG_QPLL_FBDIV) 40
+}
+if {![info exists ::env(AWG_TX_OUT_DIV)]} {
+  set env(AWG_TX_OUT_DIV) 1
+}
+if {![info exists ::env(ADI_NUM_LINKS)]} {
+  set env(ADI_NUM_LINKS) 1
+}
+
 
 # Parameter description:
 #  JESD_M : Number of converters per link
@@ -25,6 +45,7 @@ adi_project awg_kcu116 0 [list \
 
 adi_project_files awg_kcu116 [list \
 "../common/awg_spi.v" \
+  "../common/jesd_sysref_sync.v" \
   "system_top.v" \
   "system_constr.xdc"\
   "$ad_hdl_dir/library/common/ad_iobuf.v" \
