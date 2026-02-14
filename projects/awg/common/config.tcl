@@ -18,7 +18,7 @@ if [info exists ::env(ADI_DAC_MODE)] {
 
 #  1 - Single link
 #  2 - Dual link
-set num_links 2
+set num_links [get_env_param ADI_NUM_LINKS 1]
 
 # AD9144
 #                 Mode M L S F HD N NP
