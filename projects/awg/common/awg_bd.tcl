@@ -20,13 +20,12 @@ set NUM_OF_LANES [expr $NUM_LINKS * $JESD_L]
 set SAMPLES_PER_FRAME $ad_project_params(JESD_S)
 set SAMPLE_WIDTH $ad_project_params(JESD_NP)
 
-# K parameter (frames per multiframe) - CRITICAL FOR LMFC GENERATION
-# JESD204B Standard: K must be 1-32, typically 32 for Subclass 1
-# This affects LMFC rate: LMFC = byte_clock / (F * K)
-# With F=1, byte_clock=245.76MHz: K=32 → LMFC=7.68MHz, K=8 → LMFC=30.72MHz
-# WARNING: Hardware LMFC generation currently uses K=8 despite register writes of K=32
-# Root cause: AXI JESD204 TX IP may have build-time parameter overriding runtime register
-set FRAMES_PER_MULTIFRAME 32
+# K (FRAMES_PER_MULTIFRAME) is NOT a build-time IP parameter in this codebase.
+# The axi_jesd204_tx / jesd204_tx cores have no CONFIG.FRAMES_PER_MULTIFRAME
+# synthesis parameter.  K=32, subclass=1, and all other link-layer settings are
+# programmed exclusively through the AXI register interface at runtime by firmware
+# (JESD TX AXI base 0x44A90000, registers CONF0/CONF1).
+# Reference: library/jesd204/scripts/jesd204.tcl  adi_axi_jesd204_tx_create
 
 set DAC_DATA_WIDTH [expr $NUM_OF_LANES * 32]
 set SAMPLES_PER_CHANNEL [expr $DAC_DATA_WIDTH / $NUM_OF_CONVERTERS / $SAMPLE_WIDTH] 
@@ -50,46 +49,13 @@ ad_ip_instance axi_adxcvr axi_ad9144_xcvr [list \
 ]
 
 # =============================================================================
-# JESD204 link layer peripheral - K PARAMETER CONFIGURATION CRITICAL
+# JESD204 link layer peripheral
+# adi_axi_jesd204_tx_create creates a hierarchy containing:
+#   - axi_jesd204_tx  (AXI register interface, base 0x44A90000)
+#   - jesd204_tx      (link layer core, LMFC/sysref capture logic)
+# All link parameters (K, subclass, etc.) are runtime AXI register fields.
 # =============================================================================
-# The adi_axi_jesd204_tx_create procedure instantiates:
-#   - axi_jesd204_tx (AXI register interface at 0x44A90000)
-#   - jesd204_tx (link layer core with LMFC generation logic)
-#
-# KNOWN ISSUE: LMFC generation uses K=8 despite firmware writing K=32 to reg 0x210
-# Investigation required:
-#   1. Check if adi_axi_jesd204_tx_create supports K parameter (likely not)
-#   2. Verify if axi_jesd204_tx IP has FRAMES_PER_MULTIFRAME build parameter
-#   3. May need to manually configure IP after creation
-#
-# Current behavior:
-#   - Firmware writes 0x1F to CONF0[9:0] → K=32, F=1 (correct)
-#   - Hardware LMFC operates at 30.72 MHz → implies K=8 (wrong)
-#   - Expected LMFC with K=32: 7.68 MHz
-#
-# TODO: Investigate adi_axi_jesd204_tx_create implementation in:
-#       $ad_hdl_dir/library/jesd204/scripts/jesd204.tcl
 adi_axi_jesd204_tx_create axi_ad9144_jesd $NUM_OF_LANES $NUM_LINKS
-
-# Attempt to override K parameter if IP supports it
-# Note: This may not work - the IP may need synthesis-time configuration
-# Check generated IP configuration in: awg_kcu116.srcs/.../axi_ad9144_jesd_*.xci
-if {[catch {
-    # Try to set FRAMES_PER_MULTIFRAME if parameter exists
-    ad_ip_parameter axi_ad9144_jesd/tx CONFIG.FRAMES_PER_MULTIFRAME $FRAMES_PER_MULTIFRAME
-    puts "INFO: Successfully set FRAMES_PER_MULTIFRAME=$FRAMES_PER_MULTIFRAME"
-} err]} {
-    puts "WARNING: Could not set FRAMES_PER_MULTIFRAME parameter: $err"
-    puts "WARNING: K value may be hardcoded to 8 in IP - requires manual IP reconfiguration"
-}
-
-if {[catch {
-    # Try alternate parameter names
-    ad_ip_parameter axi_ad9144_jesd/tx_axi CONFIG.FRAMES_PER_MULTIFRAME $FRAMES_PER_MULTIFRAME
-    puts "INFO: Successfully set tx_axi FRAMES_PER_MULTIFRAME=$FRAMES_PER_MULTIFRAME"
-} err]} {
-    puts "INFO: tx_axi does not have FRAMES_PER_MULTIFRAME parameter (expected)"
-}
 
 # =============================================================================
 # JESD204 transport layer peripheral
@@ -261,40 +227,3 @@ ad_cpu_interrupt ps-12 mb-13 axi_ad9144_dma/irq
 
 
 ad_connect axi_dac_fifo/bypass dac_fifo_bypass
-
-# =============================================================================
-# POST-BUILD VERIFICATION CHECKLIST FOR K PARAMETER ISSUE
-# =============================================================================
-# After Vivado build completes, verify the following:
-#
-# 1. Check generated IP configuration files:
-#    awg_kcu116.srcs/sources_1/bd/system/ip/system_axi_ad9144_jesd_tx_*/
-#    Look for .xci files and search for:
-#      - FRAMES_PER_MULTIFRAME
-#      - OCTETS_PER_MULTIFRAME
-#      - Any K-related parameters
-#
-# 2. Examine IP parameter values in Vivado:
-#    - Open block design
-#    - Select axi_ad9144_jesd/tx or axi_ad9144_jesd/tx_axi
-#    - Check "Re-customize IP" for available parameters
-#    - Look for F, K, or multiframe configuration options
-#
-# 3. Check synthesis messages for parameter warnings:
-#    grep -i "frames_per_multiframe\|octets_per_multiframe" awg_kcu116_vivado.log
-#
-# 4. If no build-time K parameter exists:
-#    - The IP relies ENTIRELY on runtime register configuration
-#    - Bug is in IP RTL: LMFC logic not reading from CONF0 register
-#    - May need to patch library/jesd204/jesd204_tx/jesd204_tx.v
-#    - Or use jesd204_tx_static_config wrapper (if available)
-#
-# 5. Alternative: Use static config block
-#    Some ADI JESD204 designs use jesd204_tx_static_config which sets K at build time
-#    Check if this IP exists: library/jesd204/jesd204_tx_static_config/
-#
-# Expected LMFC rates for verification:
-#   K=4:  LMFC = 245.76 MHz / 4  = 61.44 MHz  (16.28 ns)
-#   K=8:  LMFC = 245.76 MHz / 8  = 30.72 MHz  (32.55 ns) ← CURRENT WRONG VALUE
-#   K=32: LMFC = 245.76 MHz / 32 = 7.68 MHz   (130.2 ns) ← TARGET VALUE
-# =============================================================================
