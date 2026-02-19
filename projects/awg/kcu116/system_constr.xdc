@@ -74,7 +74,29 @@ set_case_analysis 0 [get_pins -quiet -hier {*_channel/TXOUTCLKSEL[1]}]
 set_case_analysis 1 [get_pins -quiet -hier {*_channel/TXOUTCLKSEL[2]}]
 create_generated_clock -name tx_div_clk [get_pins i_system_wrapper/system_i/util_awg_xcvr/inst/i_xch_0/i_gtye4_channel/TXOUTCLK]
 
-####################################################################################
-# Constraints from file : 'kcu116_system_constr.xdc'
-####################################################################################
+# ---------------------------------------------------------------------------
+# SYSREF CDC constraints for jesd_sysref_sync (Subclass 1)
+# ---------------------------------------------------------------------------
+# sysref_in arrives via IBUFDS (not an IOB FF) and is asynchronous relative
+# to device_clk (tx_div_clk, 245.76 MHz).  The three-stage shift register
+# sysref_ff[0:2] implements the synchronizer; sysref_ff[0] is the metastable
+# capture stage and must be marked ASYNC_REG to receive placement guidance.
+# A set_false_path to sysref_ff_reg[0] silences unconstrained-path warnings
+# on the IBUFDS→fabric combinatorial arc and is consistent with the ADI core
+# treatment of asynchronous SYSREF signals (see axi_jesd204_tx_constr.xdc).
+# Do NOT replace this with set_input_delay: the sysref edge relationship to
+# device_clk is intentionally undefined at synthesis time.
+set_property ASYNC_REG TRUE \
+  [get_cells -hier -filter {NAME =~ *jesd_sysref_sync*sysref_ff_reg[*]}]
 
+set_false_path \
+  -to [get_cells -hier -filter {NAME =~ *jesd_sysref_sync*sysref_ff_reg[0]}]
+
+# sync_in (SYNC~) arrives via IBUFDS and is also asynchronous relative to
+# device_clk.  The two-stage synchronizer sync_ff1/sync_ff2 handles capture.
+set_property ASYNC_REG TRUE \
+  [get_cells -hier -filter {NAME =~ *jesd_sysref_sync*sync_ff1_reg[*]}] \
+  [get_cells -hier -filter {NAME =~ *jesd_sysref_sync*sync_ff2_reg[*]}]
+
+set_false_path \
+  -to [get_cells -hier -filter {NAME =~ *jesd_sysref_sync*sync_ff1_reg[*]}]
