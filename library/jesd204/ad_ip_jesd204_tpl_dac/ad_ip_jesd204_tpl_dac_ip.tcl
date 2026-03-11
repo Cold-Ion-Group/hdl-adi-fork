@@ -100,6 +100,13 @@ foreach p {DDS_CORDIC_DW DDS_CORDIC_PHASE_DW} {
   ] [ipx::get_user_parameters $p -of_objects $cc]
 }
 
+set_property -dict [list \
+  "value_validation_type" "range_long" \
+  "value_validation_range_minimum" 16 \
+  "value_validation_range_maximum" 32 \
+  "enablement_tcl_expr" "\$DATAPATH_DISABLE == 0" \
+] [ipx::get_user_parameters DDS_PHASE_DW -of_objects $cc]
+
 foreach {p v} {
   "NUM_LANES" "1 2 3 4 6 8 12 16 24 32" \
   "NUM_CHANNELS" "1 2 4 6 8 16 32 64" \
@@ -162,6 +169,7 @@ foreach {k v w} {
   "DDS_TYPE" "DDS Type" "comboBox" \
   "DDS_CORDIC_DW" "CORDIC DDS Data Width" "text" \
   "DDS_CORDIC_PHASE_DW" "CORDIC DDS Phase Width" "text" \
+  "DDS_PHASE_DW" "Polynomial DDS Phase Width" "text" \
   } { \
   set p [ipgui::get_guiparamspec -name $k -component $cc]
   ipgui::move_param -component $cc -order $i $p -parent $datapath_group

@@ -64,6 +64,10 @@ adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
                                          $SAMPLES_PER_FRAME \
                                          $SAMPLE_WIDTH \
 
+# 32-bit DDS phase width → ≤ 0.25 Hz frequency resolution at 983 MSPS
+# The TPL core is wrapped in a hierarchy; the actual IP is at .../dac_tpl_core
+ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.DDS_PHASE_DW 32
+
 ad_ip_instance util_upack2 axi_ad9144_upack [list \
   NUM_OF_CHANNELS $NUM_OF_CONVERTERS \
   SAMPLES_PER_CHANNEL $SAMPLES_PER_CHANNEL \
