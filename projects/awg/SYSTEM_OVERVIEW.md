@@ -164,3 +164,81 @@ main()
 
 4. **Atomic clock path** — define the external PLL needed to derive 122.88 MHz
    from a 5/10 MHz atomic reference. See [clock_architecture.md](./clock_architecture.md).
+
+## 9. TPL timed-control insertion map (AD9144 AWG path)
+
+This section maps where FTW/POW/ASF-equivalent DDS controls currently enter the
+`axi_ad9144_tpl/dac_tpl_core` path, and records concrete insertion boundaries.
+
+### 9.1 Exposed vs internal-only TPL control interfaces
+
+- **AXI-visible control interface (from block design):**
+  - `axi_ad9144_tpl/s_axi_aclk`
+  - `axi_ad9144_tpl/s_axi_aresetn`
+  - `axi_ad9144_tpl/s_axi` (mapped at `0x44A04000`)
+- **Data/stream interfaces exported by TPL hierarchy:**
+  - `axi_ad9144_tpl/link_clk`
+  - `axi_ad9144_tpl/link`
+  - `axi_ad9144_tpl/dac_dunf`
+  - `axi_ad9144_tpl/dac_enable_<i>`, `axi_ad9144_tpl/dac_valid_<i>`, `axi_ad9144_tpl/dac_data_<i>`
+- **Control-relevant pins that are currently internal-only (not exported by the hierarchy):**
+  - `axi_ad9144_tpl/dac_tpl_core/dac_sync_in`
+  - `axi_ad9144_tpl/dac_tpl_core/dac_sync_manual_req_in`
+  - `axi_ad9144_tpl/dac_tpl_core/dac_sync_manual_req_out`
+
+### 9.2 Where DDS control words are latched (per converter/tone)
+
+`dac_tpl_core` is `library/jesd204/ad_ip_jesd204_tpl_dac/ad_ip_jesd204_tpl_dac.v`.
+Its register map and channel control path are:
+
+1. **AXI write decode and per-channel register capture (`up_clk` domain):**
+   - `ad_ip_jesd204_tpl_dac_regmap` instantiates one `up_dac_channel` per converter.
+   - In `up_dac_channel`, writes latch:
+     - tone0 scale/init/incr into `up_dac_dds_scale_1`, `up_dac_dds_init_1`, `up_dac_dds_incr_1`
+     - tone1 scale/init/incr into `up_dac_dds_scale_2`, `up_dac_dds_init_2`, `up_dac_dds_incr_2`
+     - high-word extensions (for `DDS_PHASE_DW > 16`) into
+       `up_dac_dds_init_1_hi`, `up_dac_dds_incr_1_hi`, `up_dac_dds_init_2_hi`, `up_dac_dds_incr_2_hi`
+2. **Commit across clock domains (`up_clk` -> `dac_clk/link_clk`):**
+   - `up_xfer_cntrl` transfers packed control bus into
+     `dac_dds_scale_1/2`, `dac_dds_init_1/2`, `dac_dds_incr_1/2`.
+3. **Per-channel DDS use in TPL datapath (`link_clk` domain):**
+   - `ad_ip_jesd204_tpl_dac_core` slices arrays per converter and drives
+     `ad_ip_jesd204_tpl_dac_channel`.
+   - `ad_ip_jesd204_tpl_dac_channel` maps these into `ad_dds` as:
+     - `tone_1_scale`, `tone_1_init_offset`, `tone_1_freq_word`
+     - `tone_2_scale`, `tone_2_init_offset`, `tone_2_freq_word`
+
+**FTW/POW/ASF equivalence in this path**
+- FTW equivalent: `dac_dds_incr_[0|1]` (channel view) / `tone_[1|2]_freq_word` (DDS core view)
+- POW equivalent: `dac_dds_init_[0|1]` / `tone_[1|2]_init_offset`
+- ASF equivalent: `dac_dds_scale_[0|1]` / `tone_[1|2]_scale`
+
+### 9.3 Chosen integration strategy
+
+**Selected approach:** add an **external scheduled-control port bundle** to the
+TPL hierarchy and mux internally.
+
+Rationale for this project:
+- Keeps existing AXI register map and firmware ABI stable.
+- Reuses the current per-channel/tone DDS plumbing and only adds a deterministic
+  override path at the TPL boundary.
+- Minimizes risk of broad regmap surgery in shared ADI library code.
+
+### 9.4 Concrete insertion boundaries for scheduled control
+
+Planned integration points (module/signal level):
+
+- **Hierarchy export point (BD-visible):**
+  - Extend `adi_tpl_jesd204_tx_create` (`library/jesd204/scripts/jesd204.tcl`) to
+    export a scheduled-control bundle from `dac_tpl_core` up to `axi_ad9144_tpl`.
+- **Top-level TPL boundary:**
+  - Add new inputs in `ad_ip_jesd204_tpl_dac.v` (scheduled controls + `valid/ready`
+    or strobe semantics), then feed muxed outputs into existing core inputs:
+    - `dac_dds_scale_0_s`, `dac_dds_init_0_s`, `dac_dds_incr_0_s`
+    - `dac_dds_scale_1_s`, `dac_dds_init_1_s`, `dac_dds_incr_1_s`
+- **Mux point before per-channel slicing:**
+  - Perform source select in `ad_ip_jesd204_tpl_dac.v` (or immediately in
+    `ad_ip_jesd204_tpl_dac_core.v`) so downstream logic remains unchanged.
+- **No change boundary (kept intact):**
+  - `up_dac_channel` register bank semantics and existing AXI writes remain as the
+    unscheduled/base profile source.
