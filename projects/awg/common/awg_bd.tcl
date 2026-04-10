@@ -59,6 +59,23 @@ adi_axi_jesd204_tx_create axi_ad9144_jesd $NUM_OF_LANES $NUM_LINKS
 
 # =============================================================================
 # JESD204 transport layer peripheral
+# TPL hierarchy interface contract (created by adi_tpl_jesd204_tx_create):
+#   AXI-exposed control plane (CPU-visible @ 0x44A04000):
+#     - axi_ad9144_tpl/s_axi_aclk
+#     - axi_ad9144_tpl/s_axi_aresetn
+#     - axi_ad9144_tpl/s_axi              (AXI4-Lite slave)
+#   Streaming/data-plane interfaces (external to hierarchy, not register control):
+#     - axi_ad9144_tpl/link_clk
+#     - axi_ad9144_tpl/link               (AXIS toward JESD TX link layer)
+#     - axi_ad9144_tpl/dac_dunf
+#     - axi_ad9144_tpl/dac_enable_<i>, axi_ad9144_tpl/dac_valid_<i>, axi_ad9144_tpl/dac_data_<i>
+#   Internal-only TPL core control pins (exist on axi_ad9144_tpl/dac_tpl_core,
+#   but are not exported by this hierarchy in adi_tpl_jesd204_tx_create):
+#     - dac_sync_in
+#     - dac_sync_manual_req_in
+#     - dac_sync_manual_req_out
+# These internal-only pins are therefore not currently routable at the project BD
+# level unless the TPL hierarchy creation procedure is extended.
 adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
                                          $NUM_OF_CONVERTERS \
                                          $SAMPLES_PER_FRAME \
