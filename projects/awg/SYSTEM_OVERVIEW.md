@@ -242,3 +242,36 @@ Planned integration points (module/signal level):
 - **No change boundary (kept intact):**
   - `up_dac_channel` register bank semantics and existing AXI writes remain as the
     unscheduled/base profile source.
+
+### 9.5 Firmware-facing timed-event control register block (`awg_timed_ctrl`)
+
+A minimal AXI-Lite timed-control peripheral is now inserted in the AWG BD as
+`awg_timed_ctrl_0` at deterministic base address **`0x44AA0000`**.
+
+#### Address map
+
+| Absolute address | Offset | Register | Access | Notes |
+|---|---:|---|---|---|
+| `0x44AA0000` | `0x00` | `CTRL` | RW | Control bits (`bit0` write-1: commit pulse; `bit1`: enable/arm) |
+| `0x44AA0004` | `0x04` | `STATUS` | RO | Status/ack indicators |
+| `0x44AA0008` | `0x08` | `TIME_LO` | RW | Lower 32 bits of target event time |
+| `0x44AA000C` | `0x0C` | `TIME_HI` | RW | Upper 32 bits of target event time |
+| `0x44AA0010` | `0x10` | `LAST_EXEC_LO` | RO | Lower 32 bits of last committed execution time |
+| `0x44AA0014` | `0x14` | `LAST_EXEC_HI` | RO | Upper 32 bits of last committed execution time |
+| `0x44AA0018` | `0x18` | `LAST_APPLY_LO` | RO | Lower 32 bits of local scheduler timestamp at apply |
+| `0x44AA001C` | `0x1C` | `LAST_APPLY_HI` | RO | Upper 32 bits of local scheduler timestamp at apply |
+| `0x44AA0020` | `0x20` | `COMMIT_COUNT` | RO | Number of accepted commit pulses |
+| `0x44AA0024` | `0x24` | `EVENT_COUNT` | RO | Number of event entries written to storage window |
+| `0x44AA0040` | `0x40` | `EVENT_WDATA0` | RW | Packed write-window data word 0 |
+| `0x44AA0044` | `0x44` | `EVENT_WDATA1` | RW | Packed write-window data word 1 |
+| `0x44AA0048` | `0x48` | `EVENT_WDATA2` | RW | Packed write-window data word 2 |
+| `0x44AA004C` | `0x4C` | `EVENT_WDATA3` | RW | Packed write-window data word 3 |
+| `0x44AA0050` | `0x50` | `EVENT_WADDR` | RW | Event RAM write address |
+| `0x44AA0054` | `0x54` | `EVENT_WCTRL` | WO | `bit0` write-1 pushes `{WDATA3..0}` into internal event RAM |
+
+#### Clocking / CDC contract
+
+- **Scheduler execution clock domain:** `util_awg_xcvr/tx_out_clk_0`.
+- **Configuration/control domain:** `sys_cpu_clk` via AXI-Lite.
+- **CDC strategy:** only config-to-scheduler transactions cross domains
+  (commit pulse + event write requests via toggle synchronizers).
