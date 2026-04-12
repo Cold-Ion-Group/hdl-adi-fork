@@ -192,6 +192,9 @@ ad_connect sys_cpu_resetn awg_timed_ctrl_0/s_axi_aresetn
 ad_connect util_awg_xcvr/tx_out_clk_0 awg_timed_ctrl_0/sched_clk
 ad_connect axi_ad9144_jesd_rstgen/peripheral_reset awg_timed_ctrl_0/sched_reset
 
+create_bd_port -dir O marker_commit
+ad_connect marker_commit awg_timed_ctrl_0/marker_commit
+
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_tpl/link_clk
 ad_connect  axi_ad9144_jesd/tx_data axi_ad9144_tpl/link
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_upack/clk

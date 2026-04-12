@@ -21,7 +21,10 @@ module awg_timed_ctrl #(
   output reg                        s_axi_rvalid,
   input  wire                       s_axi_rready,
   input  wire                       sched_clk,
-  input  wire                       sched_reset
+  input  wire                       sched_reset,
+  output reg                        marker_commit,
+  output reg                        marker_start,
+  output reg                        marker_done
 );
 
   localparam integer EVENT_MEM_DEPTH = (1 << EVENT_MEM_ADDR_WIDTH);
@@ -211,9 +214,15 @@ module awg_timed_ctrl #(
       sched_time_counter <= 64'h0;
       last_exec_sched <= 64'h0;
       last_apply_sched <= 64'h0;
+      marker_commit <= 1'b0;
+      marker_start <= 1'b0;
+      marker_done <= 1'b0;
       for (i = 0; i < EVENT_MEM_DEPTH; i = i + 1) event_mem[i] <= 128'h0;
     end else begin
       sched_time_counter <= sched_time_counter + 1'b1;
+      marker_commit <= 1'b0;
+      marker_start <= 1'b0;
+      marker_done <= 1'b0;
 
       commit_req_sync1 <= commit_req_tgl;
       commit_req_sync2 <= commit_req_sync1;
@@ -223,6 +232,9 @@ module awg_timed_ctrl #(
         last_exec_sched <= time_reg;
         last_apply_sched <= sched_time_counter;
         commit_ack_tgl <= ~commit_ack_tgl;
+        marker_commit <= 1'b1;
+        marker_start <= 1'b1;
+        marker_done <= 1'b1;
       end
 
       event_wr_req_sync1 <= event_wr_req_tgl;

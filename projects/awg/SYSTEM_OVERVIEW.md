@@ -52,6 +52,13 @@ comes directly from AD9516 OUT9.
 The AD9144's receive-side XBAR remaps physical lanes {4,5,6,7} → logical {0,1,2,3}
 with polarity inversion on lane 2 to match the FMC-EBZ board routing.
 
+### Scheduler marker output (lab probing)
+
+- **Exact probe point**: `marker_commit` top-level HDL port on `system_top`.
+- **Constraint location**: PACKAGE pin `AF19`, `IOSTANDARD LVCMOS18`.
+- **Signal polarity**: active-high pulse (1 = commit event), generated for one scheduler clock cycle when the scheduler commit handshake is accepted.
+- **Hookup note**: probe `marker_commit` single-ended to ground; use this edge as the deterministic timestamp reference for commit-to-output latency measurements.
+
 ## 3. JESD204B Link
 
 | Parameter | Value |

@@ -238,6 +238,13 @@ Implemented and exercised in the current default baseline:
 - STPL and TPL PN validation paths.
 - Subclass-1 bring-up with OUT1/OUT6/OUT7/OUT9 clocking and internal SYSREF capture in `axi_jesd204_tx`.
 
+## 11) Scheduler marker probe point (deterministic commit marker)
+
+- **Probe signal**: `marker_commit` top-level output from `projects/awg/kcu116/system_top.v`.
+- **Physical pin**: `AF19` (`LVCMOS18`) in `projects/awg/kcu116/system_constr.xdc`.
+- **Polarity / behavior**: **active-high pulse**, one `sched_clk` cycle wide, asserted when the timed-control scheduler accepts a commit request (`commit_req_sync2 ^ commit_req_sync2_d` event in `awg_timed_ctrl`).
+- **Measurement hookup**: connect oscilloscope/logic-analyzer tip to the routed marker pin and reference to board ground to timestamp commit edges versus SYSREF/SYNC events.
+
 Implemented but not part of the current primary automated benchmark path:
 - DMA waveform path through DMAC and util_dacfifo.
 - Optional AD9144 on-chip NCO control for later placement experiments.
