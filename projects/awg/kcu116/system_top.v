@@ -55,7 +55,8 @@ module system_top #(
   output                  spi_en,        // SPI enable (direction control for spi_sdio)
 
   // DAC Control Signals
-  inout       [1:0]       dac_ctrl       // DAC control signals (e.g., FMC_HPC0_LA07_P)
+  inout       [1:0]       dac_ctrl,      // DAC control signals (e.g., FMC_HPC0_LA07_P)
+  output                  marker_commit  // Scheduler commit marker pulse output
 );
 
   // Internal Signals
@@ -206,7 +207,10 @@ module system_top #(
     .uart_sout       (uart_sout),
 
     // DAC FIFO Bypass
-    .dac_fifo_bypass (dac_fifo_bypass)
+    .dac_fifo_bypass (dac_fifo_bypass),
+
+    // Scheduler marker output
+    .marker_commit   (marker_commit)
   );
 
   // Assign local sysref signal based on device code

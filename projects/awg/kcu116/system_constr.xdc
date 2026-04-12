@@ -26,6 +26,9 @@ set_property -dict {PACKAGE_PIN AB17 IOSTANDARD LVCMOS18} [get_ports spi_clk]
 set_property -dict {PACKAGE_PIN AD16 IOSTANDARD LVCMOS18} [get_ports {dac_ctrl[0]}]
 set_property -dict {PACKAGE_PIN AE16 IOSTANDARD LVCMOS18} [get_ports {dac_ctrl[1]}]
 
+# Scheduler commit marker: probe this pin (single-ended) against GND to capture commit pulses.
+set_property -dict {PACKAGE_PIN AF19 IOSTANDARD LVCMOS18} [get_ports marker_commit]
+
 
 
 
