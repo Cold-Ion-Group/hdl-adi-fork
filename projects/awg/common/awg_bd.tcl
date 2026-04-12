@@ -185,6 +185,13 @@ ad_connect tx_sync_0 jesd_sysref_sync/sync_in
 ad_connect jesd_sysref_sync/sysref_pulse axi_ad9144_jesd/sysref
 ad_connect jesd_sysref_sync/sync_out axi_ad9144_jesd/sync
 
+create_bd_cell -type module -reference awg_timed_ctrl awg_timed_ctrl_0
+
+ad_connect sys_cpu_clk awg_timed_ctrl_0/s_axi_aclk
+ad_connect sys_cpu_resetn awg_timed_ctrl_0/s_axi_aresetn
+ad_connect util_awg_xcvr/tx_out_clk_0 awg_timed_ctrl_0/sched_clk
+ad_connect axi_ad9144_jesd_rstgen/peripheral_reset awg_timed_ctrl_0/sched_reset
+
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_tpl/link_clk
 ad_connect  axi_ad9144_jesd/tx_data axi_ad9144_tpl/link
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_upack/clk
@@ -230,6 +237,7 @@ ad_connect axi_dac_fifo/dma_xfer_last axi_ad9144_dma/m_axis_last
 ad_cpu_interconnect 0x44A60000 axi_ad9144_xcvr
 ad_cpu_interconnect 0x44A04000 axi_ad9144_tpl
 ad_cpu_interconnect 0x44A90000 axi_ad9144_jesd
+ad_cpu_interconnect 0x44AA0000 awg_timed_ctrl_0
 ad_cpu_interconnect 0x7c420000 axi_ad9144_dma
 
 
