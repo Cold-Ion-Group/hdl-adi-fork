@@ -251,12 +251,16 @@ module awg_timed_ctrl #(
   wire [15:0]  ev_flags   = fetch_data[95:80];
   wire [127:0] ev_payload = fetch_data[223:96];
   wire [31:0]  cur_event_next = read_ptr + 1'b1;
+  wire [31:0]  commit_count_next = commit_count_sched + 1'b1;
+  wire [31:0]  commit_count_next_gray = commit_count_next ^ (commit_count_next >> 1);
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
 
   // Gray-to-binary conversion used by the COMMIT_COUNT CDC mirror.
   // COMMIT_COUNT increments in sched_clk domain; its Gray-coded image crosses
   // into s_axi_aclk through a 2-FF synchronizer and is decoded back here.
+  // Algorithm: copy the MSB directly, then recover each lower bit as XOR of
+  // the next higher decoded bit and the current Gray bit.
   function [31:0] gray2bin32;
     input [31:0] g;
     integer i;
@@ -750,9 +754,8 @@ module awg_timed_ctrl #(
           ENGINE_FIRE: begin
             // Apply the event: pulse marker_commit, record telemetry
             marker_commit      <= 1'b1;
-            commit_count_sched <= commit_count_sched + 1'b1;
-            commit_count_gray_sched <= (commit_count_sched + 1'b1) ^
-                                       ((commit_count_sched + 1'b1) >> 1);
+            commit_count_sched <= commit_count_next;
+            commit_count_gray_sched <= commit_count_next_gray;
             last_exec_sched    <= ev_ts;
             prev_ts            <= ev_ts;
             // Snapshot every FIRE so firmware polling sees progress before DONE.
