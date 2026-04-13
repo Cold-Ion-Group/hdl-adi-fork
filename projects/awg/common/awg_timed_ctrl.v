@@ -197,7 +197,6 @@ module awg_timed_ctrl #(
   // Snapshot data (written in sched_clk, read in s_axi_aclk after toggle edge)
   reg [31:0] status_sched_snap;
   reg [63:0] last_exec_sched_snap;
-  reg [31:0] commit_count_snap;
   reg [31:0] cur_event_snap;
   reg [3:0]  irq_snap;
 
@@ -563,7 +562,6 @@ module awg_timed_ctrl #(
       marker_done         <= 1'b0;
       status_sched_snap   <= 32'h0;
       last_exec_sched_snap <= 64'h0;
-      commit_count_snap   <= 32'h0;
       cur_event_snap      <= 32'h0;
       irq_snap            <= 4'h0;
     end else begin
@@ -615,7 +613,6 @@ module awg_timed_ctrl #(
         prev_ts            <= 64'h0;
         // Send cleared status snapshot to AXI domain
         status_sched_snap   <= 32'h0;
-        commit_count_snap   <= 32'h0;
         cur_event_snap      <= 32'h0;
         irq_snap            <= 4'h0;
         last_exec_sched_snap <= last_exec_sched;
@@ -625,7 +622,6 @@ module awg_timed_ctrl #(
         // Stop: abort execution, return to IDLE (does not clear counters)
         engine_state        <= ENGINE_IDLE;
         status_sched_snap   <= 32'h0;
-        commit_count_snap   <= commit_count_sched;
         cur_event_snap      <= read_ptr;
         irq_snap            <= irq_sched;
         last_exec_sched_snap <= last_exec_sched;
@@ -647,7 +643,6 @@ module awg_timed_ctrl #(
               marker_start   <= 1'b1;
               // Snapshot: running=1
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
-              commit_count_snap   <= commit_count_sched;
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
@@ -656,7 +651,6 @@ module awg_timed_ctrl #(
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
-              commit_count_snap   <= commit_count_sched;
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
@@ -670,7 +664,6 @@ module awg_timed_ctrl #(
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
-              commit_count_snap   <= commit_count_sched;
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
@@ -689,7 +682,6 @@ module awg_timed_ctrl #(
               marker_start   <= 1'b1;
               // Snapshot: running=1
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
-              commit_count_snap   <= commit_count_sched;
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
@@ -725,7 +717,6 @@ module awg_timed_ctrl #(
               engine_state        <= ENGINE_ERROR;
               status_sched_snap   <= {16'h0, ERR_MISSED_DEADLINE, 12'h0,
                                       1'b1, 1'b0, 1'b0, 1'b0};
-              commit_count_snap   <= commit_count_sched;
               cur_event_snap      <= read_ptr;
               // IRQ_UNDERRUN=bit3, IRQ_ERROR=bit1  -> 4'b1010
               irq_snap            <= irq_sched | 4'b1010;
@@ -742,7 +733,6 @@ module awg_timed_ctrl #(
                 engine_state        <= ENGINE_ERROR;
                 status_sched_snap   <= {16'h0, ERR_SPACING_VIOLATION, 12'h0,
                                         1'b1, 1'b0, 1'b0, 1'b0};
-                commit_count_snap   <= commit_count_sched;
                 cur_event_snap      <= read_ptr;
                 irq_snap            <= irq_sched | 4'b0110;
                 last_exec_sched_snap <= last_exec_sched;
@@ -763,7 +753,6 @@ module awg_timed_ctrl #(
             // Snapshot every FIRE so firmware polling sees progress before DONE.
             status_sched_snap    <= {16'h0, ERR_NONE, 12'h0,
                                      1'b0, 1'b0, 1'b1, 1'b0};
-            commit_count_snap    <= commit_count_sched + 1'b1;
             cur_event_snap       <= cur_event_next;
             irq_snap             <= irq_sched;
             last_exec_sched_snap <= ev_ts;
@@ -782,7 +771,6 @@ module awg_timed_ctrl #(
               // last_exec_sched was updated to ev_ts in ENGINE_FIRE.
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
                                       1'b0, 1'b1, 1'b0, 1'b0};
-              commit_count_snap   <= commit_count_sched;
               cur_event_snap      <= cur_event_next;
               irq_snap            <= irq_sched | 4'b0001;
               last_exec_sched_snap <= last_exec_sched;
