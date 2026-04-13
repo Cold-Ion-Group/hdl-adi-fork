@@ -249,6 +249,7 @@ module awg_timed_ctrl #(
   wire [15:0]  ev_ch      = fetch_data[79:64];
   wire [15:0]  ev_flags   = fetch_data[95:80];
   wire [127:0] ev_payload = fetch_data[223:96];
+  wire [31:0]  cur_event_next = read_ptr + 1'b1;
 
   // Interrupt: level-high while any enabled IRQ bit is pending
   assign irq = |(irq_status_axi[3:0] & irq_enable_reg[3:0]);
@@ -708,7 +709,7 @@ module awg_timed_ctrl #(
             status_sched_snap    <= {16'h0, ERR_NONE, 12'h0,
                                      1'b0, 1'b0, 1'b1, 1'b0};
             commit_count_snap    <= commit_count_sched + 1'b1;
-            cur_event_snap       <= read_ptr + 1'b1;
+            cur_event_snap       <= cur_event_next;
             irq_snap             <= irq_sched;
             last_exec_sched_snap <= ev_ts;
             status_snap_tgl      <= ~status_snap_tgl;
@@ -727,7 +728,7 @@ module awg_timed_ctrl #(
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
                                       1'b0, 1'b1, 1'b0, 1'b0};
               commit_count_snap   <= commit_count_sched;
-              cur_event_snap      <= read_ptr + 1'b1;
+              cur_event_snap      <= cur_event_next;
               irq_snap            <= irq_sched | 4'b0001;
               last_exec_sched_snap <= last_exec_sched;
               status_snap_tgl     <= ~status_snap_tgl;

@@ -262,7 +262,7 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `0x44AA0000` | `0x00` | `CTRL` | RW | `0` | `[0]`=run(pulse), `[1]`=arm(pulse), `[2]`=stop(pulse), `[3]`=reset\_soft(pulse), `[8]`=irq\_en(sticky) |
 | `0x44AA0004` | `0x04` | `STATUS` | RO | `0` | `[0]`=armed, `[1]`=running, `[2]`=done, `[3]`=error, `[15:8]`=err\_code |
 | `0x44AA0008` | `0x08` | `EVENT_COUNT` | RW | `0` | Active event count (write only when `!armed && !running`) |
-| `0x44AA000C` | `0x0C` | `CUR_EVENT` | RO | `0` | Current execution progress (events fired) |
+| `0x44AA000C` | `0x0C` | `CUR_EVENT` | RO | `0` | 1-based progress count (`read_ptr + 1`): number of events fired so far |
 | `0x44AA0010` | `0x10` | `ERR_REG` | RO | `0` | Mirror of `STATUS[15:8]` for firmware compatibility |
 | `0x44AA0014` | `0x14` | `IP_ID` | RO | `0x41574753` | IP identification (`"AWGS"`) |
 | `0x44AA0018` | `0x18` | `IP_VERSION` | RO | `0x00010000` | `{major[15:0], minor[15:0]}` = 1.0 |
