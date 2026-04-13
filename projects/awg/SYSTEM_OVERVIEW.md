@@ -252,48 +252,106 @@ Planned integration points (module/signal level):
 
 ### 9.5 Firmware-facing timed-event control register block (`awg_timed_ctrl`)
 
-A minimal AXI-Lite timed-control peripheral is now inserted in the AWG BD as
+An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 `awg_timed_ctrl_0` at deterministic base address **`0x44AA0000`**.
 
 #### Address map
 
-| Absolute address | Offset | Register | Access | Notes |
-|---|---:|---|---|---|
-| `0x44AA0000` | `0x00` | `CTRL` | RW | Control bits (`bit0` write-1: commit pulse; `bit1`: enable/arm) |
-| `0x44AA0004` | `0x04` | `STATUS` | RO | Status bits: `bit0` arm mirror, `bit1` commit ack edge, `bit2` `late_event` (most recent commit was late), `bit3` `late_event_seen` (sticky since reset) |
-| `0x44AA0008` | `0x08` | `TIME_LO` | RW | Lower 32 bits of target event time |
-| `0x44AA000C` | `0x0C` | `TIME_HI` | RW | Upper 32 bits of target event time |
-| `0x44AA0010` | `0x10` | `LAST_EXEC_LO` | RO | Lower 32 bits of last committed execution time |
-| `0x44AA0014` | `0x14` | `LAST_EXEC_HI` | RO | Upper 32 bits of last committed execution time |
-| `0x44AA0018` | `0x18` | `LAST_APPLY_LO` | RO | Lower 32 bits of local scheduler timestamp at apply |
-| `0x44AA001C` | `0x1C` | `LAST_APPLY_HI` | RO | Upper 32 bits of local scheduler timestamp at apply |
-| `0x44AA0020` | `0x20` | `COMMIT_COUNT` | RO | Number of accepted commit pulses |
-| `0x44AA0024` | `0x24` | `EVENT_COUNT` | RO | Number of event entries written to storage window |
-| `0x44AA0028` | `0x28` | `LATE_EVENT_COUNT` | RO | Count of late commits (requested time `<` local scheduler time at apply) |
-| `0x44AA002C` | `0x2C` | `LAST_LATE_EVENT_ID` | RO | Commit ID (1-based `COMMIT_COUNT`) of the most recent late commit |
-| `0x44AA0040` | `0x40` | `EVENT_WDATA0` | RW | Packed write-window data word 0 |
-| `0x44AA0044` | `0x44` | `EVENT_WDATA1` | RW | Packed write-window data word 1 |
-| `0x44AA0048` | `0x48` | `EVENT_WDATA2` | RW | Packed write-window data word 2 |
-| `0x44AA004C` | `0x4C` | `EVENT_WDATA3` | RW | Packed write-window data word 3 |
-| `0x44AA0050` | `0x50` | `EVENT_WADDR` | RW | Event RAM write address |
-| `0x44AA0054` | `0x54` | `EVENT_WCTRL` | WO | `bit0` write-1 pushes `{WDATA3..0}` into internal event RAM |
+| Absolute address | Offset | Register | Access | Reset | Notes |
+|---|---:|---|---|---|---|
+| `0x44AA0000` | `0x00` | `IP_ID` | RO | `0x41575401` | IP identification (`"AWT\x01"`) |
+| `0x44AA0004` | `0x04` | `IP_VERSION` | RO | `0x00010000` | `{major[15:0], minor[15:0]}` = 1.0 |
+| `0x44AA0008` | `0x08` | `IP_CAPS` | RO | param-derived | `{depth_log2[7:0], payload_bits[7:0]=128, ts_bits[7:0]=64, rsvd[7:0]}` |
+| `0x44AA000C` | `0x0C` | `IP_SCRATCH` | RW | `0` | Read-back scratch register |
+| `0x44AA0010` | `0x10` | `CTRL` | RW | `0` | `[0]`=run(pulse), `[1]`=arm(pulse), `[2]`=stop(pulse), `[3]`=reset\_soft(pulse), `[8]`=irq\_en(sticky) |
+| `0x44AA0014` | `0x14` | `STATUS` | RO | `0` | `[0]`=armed, `[1]`=running, `[2]`=done, `[3]`=error, `[15:8]`=err\_code |
+| `0x44AA0018` | `0x18` | `TIME_NOW_LO` | RO | — | `sched_time_counter[31:0]` (best-effort 2-FF CDC, debug) |
+| `0x44AA001C` | `0x1C` | `TIME_NOW_HI` | RO | — | `sched_time_counter[63:32]` (best-effort 2-FF CDC, debug) |
+| `0x44AA0020` | `0x20` | `LAST_EXEC_LO` | RO | `0` | Timestamp of last successfully fired event `[31:0]` |
+| `0x44AA0024` | `0x24` | `LAST_EXEC_HI` | RO | `0` | Timestamp of last successfully fired event `[63:32]` |
+| `0x44AA0028` | `0x28` | `COMMIT_COUNT` | RO | `0` | Number of events successfully fired |
+| `0x44AA002C` | `0x2C` | `EVENT_COUNT` | RW | `0` | Active event count (write only when `!armed && !running`) |
+| `0x44AA0030` | `0x30` | `CUR_EVENT` | RO | `0` | Current read-pointer / execution progress |
+| `0x44AA0034` | `0x34` | `IRQ_STATUS` | RW1C | `0` | `[0]`=done, `[1]`=error, `[2]`=spacing\_violation, `[3]`=underrun |
+| `0x44AA0038` | `0x38` | `IRQ_ENABLE` | RW | `0` | Per-bit enable mask for `IRQ_STATUS` |
+| `0x44AA0040` | `0x40` | `EVT_WADDR` | RW | `0` | Event write address |
+| `0x44AA0044` | `0x44` | `EVT_WDATA0` | RW | `0` | Event `timestamp[31:0]` |
+| `0x44AA0048` | `0x48` | `EVT_WDATA1` | RW | `0` | Event `timestamp[63:32]` |
+| `0x44AA004C` | `0x4C` | `EVT_WDATA2` | RW | `0` | Event `{flags[15:0], channel[15:0]}` |
+| `0x44AA0050` | `0x50` | `EVT_WDATA3` | RW | `0` | Event `payload[31:0]` |
+| `0x44AA0054` | `0x54` | `EVT_WDATA4` | RW | `0` | Event `payload[63:32]` |
+| `0x44AA0058` | `0x58` | `EVT_WDATA5` | RW | `0` | Event `payload[95:64]` |
+| `0x44AA005C` | `0x5C` | `EVT_WDATA6` | RW | `0` | Event `payload[127:96]` |
+| `0x44AA0060` | `0x60` | `EVT_WCTRL` | WO | — | `bit0` write-1 pushes `WDATA0-6` into `event_mem[WADDR]` |
+
+#### Event word layout (256 bits stored per slot)
+
+| Bits | Field | Source register |
+|---|---|---|
+| `[63:0]` | timestamp (64 b) | `EVT_WDATA1:EVT_WDATA0` |
+| `[79:64]` | channel (16 b) | `EVT_WDATA2[15:0]` |
+| `[95:80]` | flags (16 b) | `EVT_WDATA2[31:16]` |
+| `[223:96]` | payload (128 b) | `EVT_WDATA6..EVT_WDATA3` |
+| `[255:224]` | reserved | always 0 |
 
 #### Clocking / CDC contract
 
 - **Scheduler execution clock domain:** `util_awg_xcvr/tx_out_clk_0`.
 - **Configuration/control domain:** `sys_cpu_clk` via AXI-Lite.
-- **CDC strategy:** only config-to-scheduler transactions cross domains
-  (commit pulse + event write requests via toggle synchronizers).
+- **CDC strategy:** all control commands (arm, run, stop, reset\_soft, event
+  write) cross domains via toggle synchronizers; status readback uses a
+  snapshot-on-transition mechanism with a single toggle pair per update.
+- **`TIME_NOW_LO/HI` CDC note:** these are best-effort 2-FF sync of the
+  64-bit free-running counter, split into two 32-bit halves. A one-count
+  inconsistency between LO and HI is possible at the 32-bit roll-over
+  boundary. These registers are for debug/telemetry only.
 
-#### Commit-time classification and late-event policy (v1)
+#### Engine state machine
 
-`awg_commit_fsm` evaluates each commit request against scheduler time using three
-explicit classes:
+```
+IDLE  --(arm)--> ARMED  --(run && count>0)--> WAIT_FETCH
+WAIT_FETCH --(1 cycle BRAM latency)--> COMPARE
+COMPARE --(ts > now)--> (wait)
+COMPARE --(ts <= now, spacing OK)--> FIRE
+COMPARE --(ts < now on first check: missed deadline)--> ERROR
+COMPARE --(ts_delta < MIN_SPACING_TICKS)--> ERROR
+FIRE --> ADVANCE
+ADVANCE --(more events)--> WAIT_FETCH
+ADVANCE --(last event)--> DONE
+```
 
-- **Early:** `sched_time_counter < target_time` → hold in WAIT state until due.
-- **Due:** `sched_time_counter == target_time` → commit on that cycle.
-- **Late:** `sched_time_counter > target_time` → **v1 policy** is to commit
-  immediately, assert `late_event`, set sticky `late_event_seen`, increment
-  `late_event_count`, and update `last_late_event_id`.
+`DONE` and `ERROR` are terminal until a `stop` or `reset_soft` command is issued.
 
-This makes late timing observable without dropping the commit in v1.
+#### Error codes (`STATUS[15:8]`)
+
+| Code | Name | Cause |
+|---|---|---|
+| `0x00` | ERR\_NONE | No error |
+| `0x01` | ERR\_MISSED\_DEADLINE | Event timestamp was already in the past when fetched |
+| `0x02` | ERR\_SPACING\_VIOLATION | Gap between consecutive timestamps < `MIN_SPACING_TICKS` |
+
+#### Interrupt output
+
+The `irq` port (connected to `mb-14 / ps-11`) is asserted level-high while
+any bit in `IRQ_STATUS` is set and its corresponding bit in `IRQ_ENABLE` is
+enabled. Software clears bits in `IRQ_STATUS` with RW1C writes.
+
+#### Marker outputs (sched\_clk domain)
+
+- **`marker_commit`** — 1-cycle pulse per fired event (routed to FPGA pin AF19
+  for scope probing; see `projects/awg/kcu116/system_constr.xdc`).
+- **`marker_start`** — 1-cycle pulse when engine transitions ARMED → WAIT\_FETCH
+  (start of execution sequence).
+- **`marker_done`** — 1-cycle pulse when engine transitions ADVANCE → DONE
+  (last event successfully applied).
+
+#### Deferred items (future PRs)
+
+- **Step 3 (timebase):** SYSREF-qualified `sched_time_counter` reset;
+  `TIME_RELOAD_LO/HI/CTRL` registers for firmware epoch anchoring.
+- **Step 4 (TPL DDS wiring):** `sched_*` bundle from `awg_timed_ctrl_0` to
+  `axi_ad9144_tpl`; changes to `library/jesd204/ad_ip_jesd204_tpl_dac/`.
+- **Step 5 (PHASE_REINIT):** REINIT\_COUNT / REINIT\_REJECT\_COUNT diagnostic
+  registers; single-link\_clk PHASE_REINIT pulse aligned to LMFC.
+- **Step 6 (quality gates):** cocotb directed test (N events, spacing violation,
+  missed deadline); SBY liveness on CDC handshake pairs; IP-XACT packaging.
