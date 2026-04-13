@@ -1,31 +1,34 @@
 // awg_timed_ctrl.v -- AWG timed-control AXI-Lite peripheral
 //
 // Register map (offset from base, 32-bit aligned):
-//   0x00  IP_ID         RO  0x41575401 ("AWT\x01")
-//   0x04  IP_VERSION    RO  {major[15:0], minor[15:0]} = 0x00010000
-//   0x08  IP_CAPS       RO  {event_depth_log2[7:0], payload_bits[7:0]=128, ts_bits[7:0]=64, rsvd[7:0]}
-//   0x0C  IP_SCRATCH    RW  read-back scratch register
-//   0x10  CTRL          RW  [0]=run(pulse), [1]=arm(pulse), [2]=stop(pulse),
+//   0x00  CTRL          RW  [0]=run(pulse), [1]=arm(pulse), [2]=stop(pulse),
 //                           [3]=reset_soft(pulse), [8]=irq_en(sticky)
-//   0x14  STATUS        RO  [0]=armed, [1]=running, [2]=done, [3]=error, [15:8]=err_code
-//   0x18  TIME_NOW_LO   RO  sched_time_counter[31:0]  (best-effort 2-FF CDC, debug)
-//   0x1C  TIME_NOW_HI   RO  sched_time_counter[63:32] (best-effort 2-FF CDC, debug)
-//   0x20  LAST_EXEC_LO  RO  timestamp of last successfully fired event [31:0]
-//   0x24  LAST_EXEC_HI  RO  timestamp of last successfully fired event [63:32]
-//   0x28  COMMIT_COUNT  RO  number of events successfully fired
-//   0x2C  EVENT_COUNT   RW  active event count (write only when !armed && !running)
-//   0x30  CUR_EVENT     RO  current read-pointer / execution progress
-//   0x34  IRQ_STATUS    RW1C [0]=done, [1]=error, [2]=spacing_violation, [3]=underrun
-//   0x38  IRQ_ENABLE    RW  per-bit enable mask for IRQ_STATUS
+//   0x04  STATUS        RO  [0]=armed, [1]=running, [2]=done, [3]=error, [15:8]=err_code
+//   0x08  EVENT_COUNT   RW  active event count (write only when !armed && !running)
+//   0x0C  CUR_EVENT     RO  current read-pointer / execution progress
+//   0x10  ERR_REG       RO  STATUS[15:8] mirror for firmware compatibility
+//   0x14  IP_ID         RO  0x41574753 ("AWGS")
+//   0x18  IP_VERSION    RO  {major[15:0], minor[15:0]} = 0x00010000
+//   0x1C  IP_CAPS       RO  {event_depth_log2[7:0], payload_bits[7:0]=128, ts_bits[7:0]=64, rsvd[7:0]}
+//   0x20  TIME_NOW_LO   RO  sched_time_counter[31:0]  (best-effort 2-FF CDC, debug)
+//   0x24  TIME_NOW_HI   RO  sched_time_counter[63:32] (best-effort 2-FF CDC, debug)
+//   0x28  LAST_EXEC_LO  RO  timestamp of last successfully fired event [31:0]
+//   0x2C  LAST_EXEC_HI  RO  timestamp of last successfully fired event [63:32]
+//   0x30  COMMIT_COUNT  RO  number of events successfully fired
+//   0x34  REINIT_COUNT  RO  reserved (0, Step-5 placeholder)
+//   0x38  REINIT_REJECT RO  reserved (0, Step-5 placeholder)
+//   0x3C  IRQ_STATUS    RW1C [0]=done, [1]=error, [2]=spacing_violation, [3]=underrun
 //   0x40  EVT_WADDR     RW  event write address
 //   0x44  EVT_WDATA0    RW  event timestamp[31:0]
 //   0x48  EVT_WDATA1    RW  event timestamp[63:32]
-//   0x4C  EVT_WDATA2    RW  event {flags[15:0], channel[15:0]}
+//   0x4C  EVT_WDATA2    RW  event {channel[15:0], flags[15:0]}
 //   0x50  EVT_WDATA3    RW  event payload[31:0]
 //   0x54  EVT_WDATA4    RW  event payload[63:32]
 //   0x58  EVT_WDATA5    RW  event payload[95:64]
 //   0x5C  EVT_WDATA6    RW  event payload[127:96]
 //   0x60  EVT_WCTRL     WO  bit0=push (latch WDATA0-6 into event_mem[WADDR])
+//   0x64  IRQ_ENABLE    RW  optional per-bit enable mask for IRQ_STATUS
+//   0x68  IP_SCRATCH    RW  read-back scratch register
 //
 // Event word layout (256 bits):
 //   [63:0]   timestamp (64b)
@@ -94,27 +97,28 @@ module awg_timed_ctrl #(
   localparam integer EVENT_MEM_DEPTH = (1 << EVENT_MEM_ADDR_WIDTH);
 
   // IP identification
-  localparam [31:0] IP_ID_VAL      = 32'h41575401;  // "AWT\x01"
+  localparam [31:0] IP_ID_VAL      = 32'h41574753;  // "AWGS"
   localparam [31:0] IP_VERSION_VAL = 32'h00010000;  // major=1, minor=0
   // IP_CAPS: {event_depth_log2[7:0], payload_bits[7:0]=128, ts_bits[7:0]=64, rsvd[7:0]=0}
   localparam [31:0] IP_CAPS_VAL    = {EVENT_MEM_ADDR_WIDTH[7:0], 8'd128, 8'd64, 8'h00};
 
   // Register offsets
-  localparam [7:0] REG_IP_ID        = 8'h00;
-  localparam [7:0] REG_IP_VERSION   = 8'h04;
-  localparam [7:0] REG_IP_CAPS      = 8'h08;
-  localparam [7:0] REG_IP_SCRATCH   = 8'h0C;
-  localparam [7:0] REG_CTRL         = 8'h10;
-  localparam [7:0] REG_STATUS       = 8'h14;
-  localparam [7:0] REG_TIME_NOW_LO  = 8'h18;
-  localparam [7:0] REG_TIME_NOW_HI  = 8'h1C;
-  localparam [7:0] REG_LAST_EXEC_LO = 8'h20;
-  localparam [7:0] REG_LAST_EXEC_HI = 8'h24;
-  localparam [7:0] REG_COMMIT_COUNT = 8'h28;
-  localparam [7:0] REG_EVENT_COUNT  = 8'h2C;
-  localparam [7:0] REG_CUR_EVENT    = 8'h30;
-  localparam [7:0] REG_IRQ_STATUS   = 8'h34;
-  localparam [7:0] REG_IRQ_ENABLE   = 8'h38;
+  localparam [7:0] REG_CTRL         = 8'h00;
+  localparam [7:0] REG_STATUS       = 8'h04;
+  localparam [7:0] REG_EVENT_COUNT  = 8'h08;
+  localparam [7:0] REG_CUR_EVENT    = 8'h0C;
+  localparam [7:0] REG_ERR_REG      = 8'h10;
+  localparam [7:0] REG_IP_ID        = 8'h14;
+  localparam [7:0] REG_IP_VERSION   = 8'h18;
+  localparam [7:0] REG_IP_CAPS      = 8'h1C;
+  localparam [7:0] REG_TIME_NOW_LO  = 8'h20;
+  localparam [7:0] REG_TIME_NOW_HI  = 8'h24;
+  localparam [7:0] REG_LAST_EXEC_LO = 8'h28;
+  localparam [7:0] REG_LAST_EXEC_HI = 8'h2C;
+  localparam [7:0] REG_COMMIT_COUNT = 8'h30;
+  localparam [7:0] REG_REINIT_COUNT = 8'h34;
+  localparam [7:0] REG_REINIT_REJECT= 8'h38;
+  localparam [7:0] REG_IRQ_STATUS   = 8'h3C;
   localparam [7:0] REG_EVT_WADDR    = 8'h40;
   localparam [7:0] REG_EVT_WDATA0   = 8'h44;
   localparam [7:0] REG_EVT_WDATA1   = 8'h48;
@@ -124,6 +128,8 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_EVT_WDATA5   = 8'h58;
   localparam [7:0] REG_EVT_WDATA6   = 8'h5C;
   localparam [7:0] REG_EVT_WCTRL    = 8'h60;
+  localparam [7:0] REG_IRQ_ENABLE   = 8'h64;
+  localparam [7:0] REG_IP_SCRATCH   = 8'h68;
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -393,6 +399,8 @@ module awg_timed_ctrl #(
               //  [31:0]   = EVT_WDATA0 = timestamp[31:0]
               //  [63:32]  = EVT_WDATA1 = timestamp[63:32]
               //  [95:64]  = EVT_WDATA2 = {flags[15:0], channel[15:0]}
+              //             AXI write format is {channel[31:16], flags[15:0]}.
+              //             Swap halves here so event_mem keeps {flags,channel}.
               //  [127:96] = EVT_WDATA3 = payload[31:0]
               //  [159:128]= EVT_WDATA4 = payload[63:32]
               //  [191:160]= EVT_WDATA5 = payload[95:64]
@@ -403,7 +411,7 @@ module awg_timed_ctrl #(
                                     evt_wdata5_reg,
                                     evt_wdata4_reg,
                                     evt_wdata3_reg,
-                                    evt_wdata2_reg,
+                                    {evt_wdata2_reg[15:0], evt_wdata2_reg[31:16]},
                                     evt_wdata1_reg,
                                     evt_wdata0_reg};
               event_wr_req_tgl <= ~event_wr_req_tgl;
@@ -419,21 +427,24 @@ module awg_timed_ctrl #(
       if (read_fire && !s_axi_rvalid) begin
         s_axi_rvalid <= 1'b1;
         case (s_axi_araddr)
-          REG_IP_ID:        s_axi_rdata <= IP_ID_VAL;
-          REG_IP_VERSION:   s_axi_rdata <= IP_VERSION_VAL;
-          REG_IP_CAPS:      s_axi_rdata <= IP_CAPS_VAL;
-          REG_IP_SCRATCH:   s_axi_rdata <= scratch_reg;
           // CTRL: pulse bits always read 0; only irq_en is sticky
           REG_CTRL:         s_axi_rdata <= {23'h0, irq_en_reg, 8'h0};
           REG_STATUS:       s_axi_rdata <= status_shadow;
+          REG_EVENT_COUNT:  s_axi_rdata <= event_count_cfg;
+          REG_CUR_EVENT:    s_axi_rdata <= cur_event_shadow;
+          REG_ERR_REG:      s_axi_rdata <= {24'h0, status_shadow[15:8]};
+          REG_IP_ID:        s_axi_rdata <= IP_ID_VAL;
+          REG_IP_VERSION:   s_axi_rdata <= IP_VERSION_VAL;
+          REG_IP_CAPS:      s_axi_rdata <= IP_CAPS_VAL;
           REG_TIME_NOW_LO:  s_axi_rdata <= time_now_lo_s2;
           REG_TIME_NOW_HI:  s_axi_rdata <= time_now_hi_s2;
           REG_LAST_EXEC_LO: s_axi_rdata <= last_exec_shadow[31:0];
           REG_LAST_EXEC_HI: s_axi_rdata <= last_exec_shadow[63:32];
           REG_COMMIT_COUNT: s_axi_rdata <= commit_count_shadow;
-          REG_EVENT_COUNT:  s_axi_rdata <= event_count_cfg;
-          REG_CUR_EVENT:    s_axi_rdata <= cur_event_shadow;
+          REG_REINIT_COUNT: s_axi_rdata <= 32'h0;
+          REG_REINIT_REJECT:s_axi_rdata <= 32'h0;
           REG_IRQ_STATUS:   s_axi_rdata <= irq_status_axi;
+          REG_IP_SCRATCH:   s_axi_rdata <= scratch_reg;
           REG_IRQ_ENABLE:   s_axi_rdata <= irq_enable_reg;
           REG_EVT_WADDR:    s_axi_rdata <= {{(32-EVENT_MEM_ADDR_WIDTH){1'b0}}, evt_waddr_reg};
           REG_EVT_WDATA0:   s_axi_rdata <= evt_wdata0_reg;
@@ -647,7 +658,9 @@ module awg_timed_ctrl #(
 
           ENGINE_COMPARE: begin
             compare_first <= 1'b0;
-            // Priority: missed-deadline check (first cycle only) > fire-or-wait
+            // Priority: missed-deadline check (first cycle only) > fire-or-wait.
+            // compare_first gates this check so we only classify "already late at
+            // fetch time", not while waiting for a future due timestamp.
             if (compare_first && ev_ts < sched_time_counter) begin
               // Missed deadline: timestamp was already in the past on arrival
               error_code          <= ERR_MISSED_DEADLINE;
@@ -691,6 +704,14 @@ module awg_timed_ctrl #(
             commit_count_sched <= commit_count_sched + 1'b1;
             last_exec_sched    <= ev_ts;
             prev_ts            <= ev_ts;
+            // Snapshot every FIRE so firmware polling sees progress before DONE.
+            status_sched_snap    <= {16'h0, ERR_NONE, 12'h0,
+                                     1'b0, 1'b0, 1'b1, 1'b0};
+            commit_count_snap    <= commit_count_sched + 1'b1;
+            cur_event_snap       <= read_ptr + 1'b1;
+            irq_snap             <= irq_sched;
+            last_exec_sched_snap <= ev_ts;
+            status_snap_tgl      <= ~status_snap_tgl;
             engine_state       <= ENGINE_ADVANCE;
           end
 
@@ -706,7 +727,7 @@ module awg_timed_ctrl #(
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
                                       1'b0, 1'b1, 1'b0, 1'b0};
               commit_count_snap   <= commit_count_sched;
-              cur_event_snap      <= read_ptr;
+              cur_event_snap      <= read_ptr + 1'b1;
               irq_snap            <= irq_sched | 4'b0001;
               last_exec_sched_snap <= last_exec_sched;
               status_snap_tgl     <= ~status_snap_tgl;

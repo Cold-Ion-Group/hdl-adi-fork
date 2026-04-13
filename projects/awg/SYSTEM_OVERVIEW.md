@@ -259,38 +259,41 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 
 | Absolute address | Offset | Register | Access | Reset | Notes |
 |---|---:|---|---|---|---|
-| `0x44AA0000` | `0x00` | `IP_ID` | RO | `0x41575401` | IP identification (`"AWT\x01"`) |
-| `0x44AA0004` | `0x04` | `IP_VERSION` | RO | `0x00010000` | `{major[15:0], minor[15:0]}` = 1.0 |
-| `0x44AA0008` | `0x08` | `IP_CAPS` | RO | param-derived | `{depth_log2[7:0], payload_bits[7:0]=128, ts_bits[7:0]=64, rsvd[7:0]}` |
-| `0x44AA000C` | `0x0C` | `IP_SCRATCH` | RW | `0` | Read-back scratch register |
-| `0x44AA0010` | `0x10` | `CTRL` | RW | `0` | `[0]`=run(pulse), `[1]`=arm(pulse), `[2]`=stop(pulse), `[3]`=reset\_soft(pulse), `[8]`=irq\_en(sticky) |
-| `0x44AA0014` | `0x14` | `STATUS` | RO | `0` | `[0]`=armed, `[1]`=running, `[2]`=done, `[3]`=error, `[15:8]`=err\_code |
-| `0x44AA0018` | `0x18` | `TIME_NOW_LO` | RO | — | `sched_time_counter[31:0]` (best-effort 2-FF CDC, debug) |
-| `0x44AA001C` | `0x1C` | `TIME_NOW_HI` | RO | — | `sched_time_counter[63:32]` (best-effort 2-FF CDC, debug) |
-| `0x44AA0020` | `0x20` | `LAST_EXEC_LO` | RO | `0` | Timestamp of last successfully fired event `[31:0]` |
-| `0x44AA0024` | `0x24` | `LAST_EXEC_HI` | RO | `0` | Timestamp of last successfully fired event `[63:32]` |
-| `0x44AA0028` | `0x28` | `COMMIT_COUNT` | RO | `0` | Number of events successfully fired |
-| `0x44AA002C` | `0x2C` | `EVENT_COUNT` | RW | `0` | Active event count (write only when `!armed && !running`) |
-| `0x44AA0030` | `0x30` | `CUR_EVENT` | RO | `0` | Current read-pointer / execution progress |
-| `0x44AA0034` | `0x34` | `IRQ_STATUS` | RW1C | `0` | `[0]`=done, `[1]`=error, `[2]`=spacing\_violation, `[3]`=underrun |
-| `0x44AA0038` | `0x38` | `IRQ_ENABLE` | RW | `0` | Per-bit enable mask for `IRQ_STATUS` |
+| `0x44AA0000` | `0x00` | `CTRL` | RW | `0` | `[0]`=run(pulse), `[1]`=arm(pulse), `[2]`=stop(pulse), `[3]`=reset\_soft(pulse), `[8]`=irq\_en(sticky) |
+| `0x44AA0004` | `0x04` | `STATUS` | RO | `0` | `[0]`=armed, `[1]`=running, `[2]`=done, `[3]`=error, `[15:8]`=err\_code |
+| `0x44AA0008` | `0x08` | `EVENT_COUNT` | RW | `0` | Active event count (write only when `!armed && !running`) |
+| `0x44AA000C` | `0x0C` | `CUR_EVENT` | RO | `0` | Current execution progress (events fired) |
+| `0x44AA0010` | `0x10` | `ERR_REG` | RO | `0` | Mirror of `STATUS[15:8]` for firmware compatibility |
+| `0x44AA0014` | `0x14` | `IP_ID` | RO | `0x41574753` | IP identification (`"AWGS"`) |
+| `0x44AA0018` | `0x18` | `IP_VERSION` | RO | `0x00010000` | `{major[15:0], minor[15:0]}` = 1.0 |
+| `0x44AA001C` | `0x1C` | `IP_CAPS` | RO | param-derived | `{depth_log2[7:0], payload_bits[7:0]=128, ts_bits[7:0]=64, rsvd[7:0]}` |
+| `0x44AA0020` | `0x20` | `TIME_NOW_LO` | RO | — | `sched_time_counter[31:0]` (best-effort 2-FF CDC, debug) |
+| `0x44AA0024` | `0x24` | `TIME_NOW_HI` | RO | — | `sched_time_counter[63:32]` (best-effort 2-FF CDC, debug) |
+| `0x44AA0028` | `0x28` | `LAST_EXEC_LO` | RO | `0` | Timestamp of last successfully fired event `[31:0]` |
+| `0x44AA002C` | `0x2C` | `LAST_EXEC_HI` | RO | `0` | Timestamp of last successfully fired event `[63:32]` |
+| `0x44AA0030` | `0x30` | `COMMIT_COUNT` | RO | `0` | Number of events successfully fired |
+| `0x44AA0034` | `0x34` | `REINIT_COUNT` | RO | `0` | Reserved (Step-5 placeholder) |
+| `0x44AA0038` | `0x38` | `REINIT_REJECT` | RO | `0` | Reserved (Step-5 placeholder) |
+| `0x44AA003C` | `0x3C` | `IRQ_STATUS` | RW1C | `0` | `[0]`=done, `[1]`=error, `[2]`=spacing\_violation, `[3]`=underrun |
 | `0x44AA0040` | `0x40` | `EVT_WADDR` | RW | `0` | Event write address |
 | `0x44AA0044` | `0x44` | `EVT_WDATA0` | RW | `0` | Event `timestamp[31:0]` |
 | `0x44AA0048` | `0x48` | `EVT_WDATA1` | RW | `0` | Event `timestamp[63:32]` |
-| `0x44AA004C` | `0x4C` | `EVT_WDATA2` | RW | `0` | Event `{flags[15:0], channel[15:0]}` |
+| `0x44AA004C` | `0x4C` | `EVT_WDATA2` | RW | `0` | Event write format `{channel[15:0], flags[15:0]}` |
 | `0x44AA0050` | `0x50` | `EVT_WDATA3` | RW | `0` | Event `payload[31:0]` |
 | `0x44AA0054` | `0x54` | `EVT_WDATA4` | RW | `0` | Event `payload[63:32]` |
 | `0x44AA0058` | `0x58` | `EVT_WDATA5` | RW | `0` | Event `payload[95:64]` |
 | `0x44AA005C` | `0x5C` | `EVT_WDATA6` | RW | `0` | Event `payload[127:96]` |
 | `0x44AA0060` | `0x60` | `EVT_WCTRL` | WO | — | `bit0` write-1 pushes `WDATA0-6` into `event_mem[WADDR]` |
+| `0x44AA0064` | `0x64` | `IRQ_ENABLE` | RW | `0` | Optional per-bit enable mask for `IRQ_STATUS` |
+| `0x44AA0068` | `0x68` | `IP_SCRATCH` | RW | `0` | Read-back scratch register |
 
 #### Event word layout (256 bits stored per slot)
 
 | Bits | Field | Source register |
 |---|---|---|
 | `[63:0]` | timestamp (64 b) | `EVT_WDATA1:EVT_WDATA0` |
-| `[79:64]` | channel (16 b) | `EVT_WDATA2[15:0]` |
-| `[95:80]` | flags (16 b) | `EVT_WDATA2[31:16]` |
+| `[79:64]` | channel (16 b) | `EVT_WDATA2[31:16]` |
+| `[95:80]` | flags (16 b) | `EVT_WDATA2[15:0]` |
 | `[223:96]` | payload (128 b) | `EVT_WDATA6..EVT_WDATA3` |
 | `[255:224]` | reserved | always 0 |
 
@@ -300,7 +303,8 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 - **Configuration/control domain:** `sys_cpu_clk` via AXI-Lite.
 - **CDC strategy:** all control commands (arm, run, stop, reset\_soft, event
   write) cross domains via toggle synchronizers; status readback uses a
-  snapshot-on-transition mechanism with a single toggle pair per update.
+  snapshot mechanism (state transitions + per-`FIRE` progress snapshots) with
+  a single toggle pair per update.
 - **`TIME_NOW_LO/HI` CDC note:** these are best-effort 2-FF sync of the
   64-bit free-running counter, split into two 32-bit halves. A one-count
   inconsistency between LO and HI is possible at the 32-bit roll-over
