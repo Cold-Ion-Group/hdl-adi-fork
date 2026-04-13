@@ -400,7 +400,8 @@ module awg_timed_ctrl #(
               //  [31:0]   = EVT_WDATA0 = timestamp[31:0]
               //  [63:32]  = EVT_WDATA1 = timestamp[63:32]
               //  [95:64]  = EVT_WDATA2 = {flags[15:0], channel[15:0]}
-              //             AXI write format is {channel[31:16], flags[15:0]}.
+              //             AXI write format is {channel[15:0], flags[15:0]}
+              //             mapped onto WDATA2[31:16]/[15:0].
               //             Swap halves here so event_mem keeps {flags,channel}.
               //  [127:96] = EVT_WDATA3 = payload[31:0]
               //  [159:128]= EVT_WDATA4 = payload[63:32]
