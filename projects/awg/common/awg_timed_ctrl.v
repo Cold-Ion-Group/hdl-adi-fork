@@ -39,6 +39,8 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_LAST_APPLY_HI= 8'h1C;
   localparam [7:0] REG_COMMIT_COUNT = 8'h20;
   localparam [7:0] REG_EVENT_COUNT  = 8'h24;
+  localparam [7:0] REG_LATE_EVENT_COUNT = 8'h28;
+  localparam [7:0] REG_LAST_LATE_EVENT_ID = 8'h2C;
   localparam [7:0] REG_EVENT_WDATA0 = 8'h40;
   localparam [7:0] REG_EVENT_WDATA1 = 8'h44;
   localparam [7:0] REG_EVENT_WDATA2 = 8'h48;
@@ -58,15 +60,25 @@ module awg_timed_ctrl #(
   reg event_wr_ack_sync1, event_wr_ack_sync2, event_wr_ack_sync2_d;
 
   reg [31:0] commit_count_shadow, event_count_shadow;
+  reg [31:0] late_event_count_shadow, last_late_event_id_shadow;
+  reg late_event_shadow, late_event_seen_shadow;
   reg [63:0] last_exec_shadow, last_apply_shadow;
 
   reg [31:0] commit_count_sched, event_count_sched;
+  reg [31:0] late_event_count_sched, last_late_event_id_sched;
+  reg late_event_sched, late_event_seen_sched;
   reg [63:0] sched_time_counter, last_exec_sched, last_apply_sched;
   reg [127:0] event_mem [0:EVENT_MEM_DEPTH-1];
 
   reg commit_req_sync1, commit_req_sync2, commit_req_sync2_d;
   reg event_wr_req_sync1, event_wr_req_sync2, event_wr_req_sync2_d;
   reg commit_ack_tgl, event_wr_ack_tgl;
+  reg commit_pending;
+  reg [63:0] commit_target_time;
+
+  localparam [1:0] COMMIT_FSM_IDLE = 2'd0;
+  localparam [1:0] COMMIT_FSM_WAIT = 2'd1;
+  reg [1:0] awg_commit_fsm;
 
   wire write_fire = s_axi_awvalid && s_axi_wvalid && s_axi_awready && s_axi_wready;
   wire read_fire  = s_axi_arvalid && s_axi_arready;
@@ -102,6 +114,10 @@ module awg_timed_ctrl #(
       event_wr_ack_sync2_d <= 1'b0;
       commit_count_shadow <= 32'h0;
       event_count_shadow <= 32'h0;
+      late_event_count_shadow <= 32'h0;
+      last_late_event_id_shadow <= 32'h0;
+      late_event_shadow <= 1'b0;
+      late_event_seen_shadow <= 1'b0;
       last_exec_shadow <= 64'h0;
       last_apply_shadow <= 64'h0;
     end else begin
@@ -165,7 +181,7 @@ module awg_timed_ctrl #(
         s_axi_rvalid <= 1'b1;
         case (s_axi_araddr)
           REG_CTRL: s_axi_rdata <= ctrl_reg;
-          REG_STATUS: s_axi_rdata <= {30'h0, commit_ack_sync2 ^ commit_ack_sync2_d, ctrl_reg[1]};
+          REG_STATUS: s_axi_rdata <= {28'h0, late_event_seen_shadow, late_event_shadow, commit_ack_sync2 ^ commit_ack_sync2_d, ctrl_reg[1]};
           REG_TIME_LO: s_axi_rdata <= time_reg[31:0];
           REG_TIME_HI: s_axi_rdata <= time_reg[63:32];
           REG_LAST_EXEC_LO: s_axi_rdata <= last_exec_shadow[31:0];
@@ -174,6 +190,8 @@ module awg_timed_ctrl #(
           REG_LAST_APPLY_HI: s_axi_rdata <= last_apply_shadow[63:32];
           REG_COMMIT_COUNT: s_axi_rdata <= commit_count_shadow;
           REG_EVENT_COUNT: s_axi_rdata <= event_count_shadow;
+          REG_LATE_EVENT_COUNT: s_axi_rdata <= late_event_count_shadow;
+          REG_LAST_LATE_EVENT_ID: s_axi_rdata <= last_late_event_id_shadow;
           REG_EVENT_WDATA0: s_axi_rdata <= event_wdata0_reg;
           REG_EVENT_WDATA1: s_axi_rdata <= event_wdata1_reg;
           REG_EVENT_WDATA2: s_axi_rdata <= event_wdata2_reg;
@@ -190,6 +208,10 @@ module awg_timed_ctrl #(
         commit_count_shadow <= commit_count_sched;
         last_exec_shadow <= last_exec_sched;
         last_apply_shadow <= last_apply_sched;
+        late_event_shadow <= late_event_sched;
+        late_event_seen_shadow <= late_event_seen_sched;
+        late_event_count_shadow <= late_event_count_sched;
+        last_late_event_id_shadow <= last_late_event_id_sched;
       end
 
       event_wr_ack_sync1 <= event_wr_ack_tgl;
@@ -211,9 +233,16 @@ module awg_timed_ctrl #(
       event_wr_ack_tgl <= 1'b0;
       commit_count_sched <= 32'h0;
       event_count_sched <= 32'h0;
+      late_event_count_sched <= 32'h0;
+      last_late_event_id_sched <= 32'h0;
+      late_event_sched <= 1'b0;
+      late_event_seen_sched <= 1'b0;
       sched_time_counter <= 64'h0;
       last_exec_sched <= 64'h0;
       last_apply_sched <= 64'h0;
+      commit_pending <= 1'b0;
+      commit_target_time <= 64'h0;
+      awg_commit_fsm <= COMMIT_FSM_IDLE;
       marker_commit <= 1'b0;
       marker_start <= 1'b0;
       marker_done <= 1'b0;
@@ -228,13 +257,40 @@ module awg_timed_ctrl #(
       commit_req_sync2 <= commit_req_sync1;
       commit_req_sync2_d <= commit_req_sync2;
       if (commit_req_sync2 ^ commit_req_sync2_d) begin
-        commit_count_sched <= commit_count_sched + 1'b1;
-        last_exec_sched <= time_reg;
-        last_apply_sched <= sched_time_counter;
-        commit_ack_tgl <= ~commit_ack_tgl;
-        marker_commit <= 1'b1;
-        marker_start <= 1'b1;
-        marker_done <= 1'b1;
+        commit_target_time <= time_reg;
+        commit_pending <= 1'b1;
+        late_event_sched <= 1'b0;
+        awg_commit_fsm <= COMMIT_FSM_WAIT;
+      end
+
+      case (awg_commit_fsm)
+        COMMIT_FSM_IDLE: begin
+        end
+        COMMIT_FSM_WAIT: begin
+          if (commit_pending) begin
+            if (sched_time_counter < commit_target_time) begin
+              // Early event: wait for due cycle.
+            end else begin
+              commit_count_sched <= commit_count_sched + 1'b1;
+              last_exec_sched <= commit_target_time;
+              last_apply_sched <= sched_time_counter;
+              commit_ack_tgl <= ~commit_ack_tgl;
+              marker_commit <= 1'b1;
+              marker_start <= 1'b1;
+              marker_done <= 1'b1;
+              if (sched_time_counter > commit_target_time) begin
+                // Late policy (v1): commit immediately and record late-event telemetry.
+                late_event_sched <= 1'b1;
+                late_event_seen_sched <= 1'b1;
+                late_event_count_sched <= late_event_count_sched + 1'b1;
+                last_late_event_id_sched <= commit_count_sched + 1'b1;
+              end
+              commit_pending <= 1'b0;
+              awg_commit_fsm <= COMMIT_FSM_IDLE;
+            end
+          end
+        end
+        default: awg_commit_fsm <= COMMIT_FSM_IDLE;
       end
 
       event_wr_req_sync1 <= event_wr_req_tgl;

@@ -260,7 +260,7 @@ A minimal AXI-Lite timed-control peripheral is now inserted in the AWG BD as
 | Absolute address | Offset | Register | Access | Notes |
 |---|---:|---|---|---|
 | `0x44AA0000` | `0x00` | `CTRL` | RW | Control bits (`bit0` write-1: commit pulse; `bit1`: enable/arm) |
-| `0x44AA0004` | `0x04` | `STATUS` | RO | Status/ack indicators |
+| `0x44AA0004` | `0x04` | `STATUS` | RO | Status bits: `bit0` arm mirror, `bit1` commit ack edge, `bit2` `late_event` (most recent commit was late), `bit3` `late_event_seen` (sticky since reset) |
 | `0x44AA0008` | `0x08` | `TIME_LO` | RW | Lower 32 bits of target event time |
 | `0x44AA000C` | `0x0C` | `TIME_HI` | RW | Upper 32 bits of target event time |
 | `0x44AA0010` | `0x10` | `LAST_EXEC_LO` | RO | Lower 32 bits of last committed execution time |
@@ -269,6 +269,8 @@ A minimal AXI-Lite timed-control peripheral is now inserted in the AWG BD as
 | `0x44AA001C` | `0x1C` | `LAST_APPLY_HI` | RO | Upper 32 bits of local scheduler timestamp at apply |
 | `0x44AA0020` | `0x20` | `COMMIT_COUNT` | RO | Number of accepted commit pulses |
 | `0x44AA0024` | `0x24` | `EVENT_COUNT` | RO | Number of event entries written to storage window |
+| `0x44AA0028` | `0x28` | `LATE_EVENT_COUNT` | RO | Count of late commits (requested time `<` local scheduler time at apply) |
+| `0x44AA002C` | `0x2C` | `LAST_LATE_EVENT_ID` | RO | Commit ID (1-based `COMMIT_COUNT`) of the most recent late commit |
 | `0x44AA0040` | `0x40` | `EVENT_WDATA0` | RW | Packed write-window data word 0 |
 | `0x44AA0044` | `0x44` | `EVENT_WDATA1` | RW | Packed write-window data word 1 |
 | `0x44AA0048` | `0x48` | `EVENT_WDATA2` | RW | Packed write-window data word 2 |
@@ -282,3 +284,16 @@ A minimal AXI-Lite timed-control peripheral is now inserted in the AWG BD as
 - **Configuration/control domain:** `sys_cpu_clk` via AXI-Lite.
 - **CDC strategy:** only config-to-scheduler transactions cross domains
   (commit pulse + event write requests via toggle synchronizers).
+
+#### Commit-time classification and late-event policy (v1)
+
+`awg_commit_fsm` evaluates each commit request against scheduler time using three
+explicit classes:
+
+- **Early:** `sched_time_counter < target_time` → hold in WAIT state until due.
+- **Due:** `sched_time_counter == target_time` → commit on that cycle.
+- **Late:** `sched_time_counter > target_time` → **v1 policy** is to commit
+  immediately, assert `late_event`, set sticky `late_event_seen`, increment
+  `late_event_count`, and update `last_late_event_id`.
+
+This makes late timing observable without dropping the commit in v1.
