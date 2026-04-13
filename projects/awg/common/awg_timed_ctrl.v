@@ -254,6 +254,9 @@ module awg_timed_ctrl #(
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
 
+  // Gray-to-binary conversion used by the COMMIT_COUNT CDC mirror.
+  // COMMIT_COUNT increments in sched_clk domain; its Gray-coded image crosses
+  // into s_axi_aclk through a 2-FF synchronizer and is decoded back here.
   function [31:0] gray2bin32;
     input [31:0] g;
     integer i;
@@ -571,7 +574,6 @@ module awg_timed_ctrl #(
       marker_commit <= 1'b0;
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
-      commit_count_gray_sched <= commit_count_sched ^ (commit_count_sched >> 1);
 
       // -------------------------------------------------------------------
       // CDC sync chains: AXI -> sched
@@ -608,6 +610,7 @@ module awg_timed_ctrl #(
         engine_state       <= ENGINE_IDLE;
         read_ptr           <= 32'h0;
         commit_count_sched <= 32'h0;
+        commit_count_gray_sched <= 32'h0;
         irq_sched          <= 4'h0;
         error_code         <= ERR_NONE;
         prev_ts            <= 64'h0;
@@ -748,6 +751,8 @@ module awg_timed_ctrl #(
             // Apply the event: pulse marker_commit, record telemetry
             marker_commit      <= 1'b1;
             commit_count_sched <= commit_count_sched + 1'b1;
+            commit_count_gray_sched <= (commit_count_sched + 1'b1) ^
+                                       ((commit_count_sched + 1'b1) >> 1);
             last_exec_sched    <= ev_ts;
             prev_ts            <= ev_ts;
             // Snapshot every FIRE so firmware polling sees progress before DONE.
