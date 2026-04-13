@@ -302,9 +302,10 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 - **Scheduler execution clock domain:** `util_awg_xcvr/tx_out_clk_0`.
 - **Configuration/control domain:** `sys_cpu_clk` via AXI-Lite.
 - **CDC strategy:** all control commands (arm, run, stop, reset\_soft, event
-  write) cross domains via toggle synchronizers; status readback uses a
-  snapshot mechanism (state transitions + per-`FIRE` progress snapshots) with
-  a single toggle pair per update.
+  write) cross domains via toggle synchronizers; `COMMIT_COUNT` crosses
+  domains via Gray-coded counter synchronization for robust counting; status,
+  `CUR_EVENT`, `LAST_EXEC_*`, and IRQ accumulation use the snapshot toggle
+  mechanism (state transitions + per-`FIRE` progress snapshots).
 - **`TIME_NOW_LO/HI` CDC note:** these are best-effort 2-FF sync of the
   64-bit free-running counter, split into two 32-bit halves. A one-count
   inconsistency between LO and HI is possible at the 32-bit roll-over

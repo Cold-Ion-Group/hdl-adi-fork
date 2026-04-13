@@ -172,6 +172,7 @@ module awg_timed_ctrl #(
   reg [63:0] last_exec_shadow;
   reg [31:0] commit_count_shadow;
   reg [31:0] cur_event_shadow;
+  reg [31:0] commit_count_gray_sync1, commit_count_gray_sync2;
 
   // TIME_NOW best-effort 2-FF sync (debug only)
   reg [31:0] time_now_lo_s1, time_now_lo_s2;
@@ -226,6 +227,7 @@ module awg_timed_ctrl #(
   reg [31:0] read_ptr;
   reg [63:0] last_exec_sched;
   reg [31:0] commit_count_sched;
+  reg [31:0] commit_count_gray_sched;
   reg [63:0] prev_ts;            // timestamp of previous fired event (spacing check)
   reg [7:0]  error_code;
   reg [3:0]  irq_sched;          // sticky IRQ bits in sched domain
@@ -250,6 +252,18 @@ module awg_timed_ctrl #(
   wire [15:0]  ev_flags   = fetch_data[95:80];
   wire [127:0] ev_payload = fetch_data[223:96];
   wire [31:0]  cur_event_next = read_ptr + 1'b1;
+  wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
+  wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
+
+  function [31:0] gray2bin32;
+    input [31:0] g;
+    integer i;
+    begin
+      gray2bin32[31] = g[31];
+      for (i = 30; i >= 0; i = i - 1)
+        gray2bin32[i] = gray2bin32[i+1] ^ g[i];
+    end
+  endfunction
 
   // Interrupt: level-high while any enabled IRQ bit is pending
   assign irq = |(irq_status_axi[3:0] & irq_enable_reg[3:0]);
@@ -291,6 +305,8 @@ module awg_timed_ctrl #(
       last_exec_shadow   <= 64'h0;
       commit_count_shadow <= 32'h0;
       cur_event_shadow   <= 32'h0;
+      commit_count_gray_sync1 <= 32'h0;
+      commit_count_gray_sync2 <= 32'h0;
       status_snap_sync1  <= 1'b0;
       status_snap_sync2  <= 1'b0;
       status_snap_sync2_d <= 1'b0;
@@ -399,10 +415,11 @@ module awg_timed_ctrl #(
               // Pack 256-bit event word:
               //  [31:0]   = EVT_WDATA0 = timestamp[31:0]
               //  [63:32]  = EVT_WDATA1 = timestamp[63:32]
-              //  [95:64]  = EVT_WDATA2 = {flags[15:0], channel[15:0]}
-              //             AXI write format is {channel[15:0], flags[15:0]}
-              //             mapped onto WDATA2[31:16]/[15:0].
-              //             Swap halves here so event_mem keeps {flags,channel}.
+              //  [95:64]  = EVT_WDATA2 (event RAM) = {flags[15:0], channel[15:0]}
+              //             AXI write view: WDATA2[31:16]=channel, WDATA2[15:0]=flags
+              //             Event RAM view: [95:80]=flags, [79:64]=channel
+              //             Swap halves here to convert AXI write ordering into
+              //             event RAM ordering.
               //  [127:96] = EVT_WDATA3 = payload[31:0]
               //  [159:128]= EVT_WDATA4 = payload[63:32]
               //  [191:160]= EVT_WDATA5 = payload[95:64]
@@ -470,11 +487,16 @@ module awg_timed_ctrl #(
       if (status_snap_sync2 ^ status_snap_sync2_d) begin
         status_shadow       <= status_sched_snap;
         last_exec_shadow    <= last_exec_sched_snap;
-        commit_count_shadow <= commit_count_snap;
         cur_event_shadow    <= cur_event_snap;
         // OR in new IRQ bits (accumulate; AXI clears via RW1C write)
         irq_status_axi      <= irq_status_axi | {28'h0, irq_snap};
       end
+
+      // Commit-count CDC via Gray-coded counter mirror.
+      // This avoids lost updates when status_snap_tgl edges coalesce.
+      commit_count_gray_sync1 <= commit_count_gray_sched;
+      commit_count_gray_sync2 <= commit_count_gray_sync1;
+      commit_count_shadow     <= gray2bin32(commit_count_gray_sync2);
 
       // Event-write ack (only used for future event_count tracking)
       event_wr_ack_sync1   <= event_wr_ack_tgl;
@@ -531,6 +553,7 @@ module awg_timed_ctrl #(
       read_ptr            <= 32'h0;
       last_exec_sched     <= 64'h0;
       commit_count_sched  <= 32'h0;
+      commit_count_gray_sched <= 32'h0;
       prev_ts             <= 64'h0;
       error_code          <= ERR_NONE;
       irq_sched           <= 4'h0;
@@ -550,6 +573,7 @@ module awg_timed_ctrl #(
       marker_commit <= 1'b0;
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
+      commit_count_gray_sched <= commit_count_sched ^ (commit_count_sched >> 1);
 
       // -------------------------------------------------------------------
       // CDC sync chains: AXI -> sched
@@ -609,38 +633,68 @@ module awg_timed_ctrl #(
 
       end else begin
         // -------------------------------------------------------------------
-        // ARM edge: IDLE -> ARMED
+        // ARM/RUN edge handling.
+        // If both edges arrive in the same cycle while IDLE, transition
+        // directly to WAIT_FETCH (or ARMED if event_count is zero).
         // -------------------------------------------------------------------
-        if (arm_req_sync2 ^ arm_req_sync2_d) begin
+        if (arm_edge && run_edge) begin
           if (engine_state == ENGINE_IDLE) begin
             event_count_sched <= event_count_s2;
-            engine_state      <= ENGINE_ARMED;
-            // Snapshot: armed=1
-            status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
-            commit_count_snap   <= commit_count_sched;
-            cur_event_snap      <= 32'h0;
-            irq_snap            <= irq_sched;
-            last_exec_sched_snap <= last_exec_sched;
-            status_snap_tgl     <= ~status_snap_tgl;
+            if (event_count_s2 > 0) begin
+              read_ptr       <= 32'h0;
+              prev_ts        <= 64'h0;
+              engine_state   <= ENGINE_WAIT_FETCH;
+              marker_start   <= 1'b1;
+              // Snapshot: running=1
+              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
+              commit_count_snap   <= commit_count_sched;
+              cur_event_snap      <= 32'h0;
+              irq_snap            <= irq_sched;
+              last_exec_sched_snap <= last_exec_sched;
+              status_snap_tgl     <= ~status_snap_tgl;
+            end else begin
+              engine_state      <= ENGINE_ARMED;
+              // Snapshot: armed=1
+              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
+              commit_count_snap   <= commit_count_sched;
+              cur_event_snap      <= 32'h0;
+              irq_snap            <= irq_sched;
+              last_exec_sched_snap <= last_exec_sched;
+              status_snap_tgl     <= ~status_snap_tgl;
+            end
           end
-        end
+        end else begin
+          if (arm_edge) begin
+            if (engine_state == ENGINE_IDLE) begin
+              event_count_sched <= event_count_s2;
+              engine_state      <= ENGINE_ARMED;
+              // Snapshot: armed=1
+              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
+              commit_count_snap   <= commit_count_sched;
+              cur_event_snap      <= 32'h0;
+              irq_snap            <= irq_sched;
+              last_exec_sched_snap <= last_exec_sched;
+              status_snap_tgl     <= ~status_snap_tgl;
+            end
+          end
 
-        // -------------------------------------------------------------------
-        // RUN edge: ARMED -> WAIT_FETCH (starts execution)
-        // -------------------------------------------------------------------
-        if (run_req_sync2 ^ run_req_sync2_d) begin
-          if (engine_state == ENGINE_ARMED && event_count_sched > 0) begin
-            read_ptr       <= 32'h0;
-            prev_ts        <= 64'h0;
-            engine_state   <= ENGINE_WAIT_FETCH;
-            marker_start   <= 1'b1;
-            // Snapshot: running=1
-            status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
-            commit_count_snap   <= commit_count_sched;
-            cur_event_snap      <= 32'h0;
-            irq_snap            <= irq_sched;
-            last_exec_sched_snap <= last_exec_sched;
-            status_snap_tgl     <= ~status_snap_tgl;
+          // -------------------------------------------------------------------
+          // RUN edge: ARMED -> WAIT_FETCH (starts execution)
+          // -------------------------------------------------------------------
+          if (run_edge) begin
+            if (engine_state == ENGINE_ARMED && event_count_sched > 0) begin
+              read_ptr       <= 32'h0;
+              prev_ts        <= 64'h0;
+              engine_state   <= ENGINE_WAIT_FETCH;
+              marker_start   <= 1'b1;
+              // Snapshot: running=1
+              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
+              commit_count_snap   <= commit_count_sched;
+              cur_event_snap      <= 32'h0;
+              irq_snap            <= irq_sched;
+              last_exec_sched_snap <= last_exec_sched;
+              status_snap_tgl     <= ~status_snap_tgl;
+            end
           end
         end
 
