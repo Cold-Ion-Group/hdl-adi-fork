@@ -256,9 +256,9 @@ module awg_timed_ctrl #(
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
 
-  // Gray-to-binary conversion used by the COMMIT_COUNT CDC mirror.
+  // Gray-to-binary conversion for AXI-domain COMMIT_COUNT CDC decode.
   // COMMIT_COUNT increments in sched_clk domain; its Gray-coded image crosses
-  // into s_axi_aclk through a 2-FF synchronizer and is decoded back here.
+  // into s_axi_aclk through a 2-FF synchronizer chain and is decoded here.
   // Algorithm: copy the MSB directly, then recover each lower bit as XOR of
   // the next higher decoded bit and the current Gray bit.
   function [31:0] gray2bin32;
@@ -498,7 +498,7 @@ module awg_timed_ctrl #(
         irq_status_axi      <= irq_status_axi | {28'h0, irq_snap};
       end
 
-      // Commit-count CDC via Gray-coded counter mirror.
+      // Commit-count CDC via Gray-coded synchronizer chain.
       // This avoids lost updates when status_snap_tgl edges coalesce.
       commit_count_gray_sync1 <= commit_count_gray_sched;
       commit_count_gray_sync2 <= commit_count_gray_sync1;
