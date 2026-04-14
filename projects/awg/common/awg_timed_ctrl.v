@@ -142,6 +142,8 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_TIME_RELOAD_LO   = 8'h6C;
   localparam [7:0] REG_TIME_RELOAD_HI   = 8'h70;
   localparam [7:0] REG_TIME_RELOAD_CTRL = 8'h74;
+  localparam integer TIME_RELOAD_CTRL_ARM_ON_SYSREF = 0;
+  localparam integer TIME_RELOAD_CTRL_LOAD_NOW      = 1;
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -420,10 +422,12 @@ module awg_timed_ctrl #(
           end
           REG_TIME_RELOAD_CTRL: begin
             if (s_axi_wstrb[0]) begin
-              time_reload_ctrl_reg[0] <= s_axi_wdata[0];
-              if (s_axi_wdata[0]) load_sysref_req_tgl <= ~load_sysref_req_tgl;
-              if (s_axi_wdata[1]) load_now_req_tgl    <= ~load_now_req_tgl;
+              time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF] <= s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF];
             end
+            if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF])
+              load_sysref_req_tgl <= ~load_sysref_req_tgl;
+            if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_LOAD_NOW])
+              load_now_req_tgl    <= ~load_now_req_tgl;
           end
           REG_IRQ_STATUS: begin
             // RW1C: writing a 1 to a bit clears it
@@ -538,8 +542,10 @@ module awg_timed_ctrl #(
           REG_IRQ_ENABLE:   s_axi_rdata <= irq_enable_reg;
           REG_TIME_RELOAD_LO:   s_axi_rdata <= time_reload_lo_reg;
           REG_TIME_RELOAD_HI:   s_axi_rdata <= time_reload_hi_reg;
-          // CTRL[1] is a write-1 pulse command (load-now), so it always reads 0.
-          REG_TIME_RELOAD_CTRL: s_axi_rdata <= {30'h0, 1'b0, time_reload_ctrl_reg[0]};
+          // CTRL[1] is a write-only write-1 pulse command (load-now), so it reads 0.
+          REG_TIME_RELOAD_CTRL: s_axi_rdata <= {30'h0,
+                                                1'b0,
+                                                time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF]};
           REG_EVT_WADDR:    s_axi_rdata <= {{(32-EVENT_MEM_ADDR_WIDTH){1'b0}}, evt_waddr_reg};
           REG_EVT_WDATA0:   s_axi_rdata <= evt_wdata0_reg;
           REG_EVT_WDATA1:   s_axi_rdata <= evt_wdata1_reg;
