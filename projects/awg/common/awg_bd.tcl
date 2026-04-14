@@ -72,6 +72,8 @@ adi_axi_jesd204_tx_create axi_ad9144_jesd $NUM_OF_LANES $NUM_LINKS
 #   Extended scheduled-control pins exported at hierarchy boundary:
 #     - sched_scale_s / sched_init_s / sched_incr_s / sched_apply_s
 #     - sched_phase_reinit
+#   Scheduler epoch anchor input:
+#     - sysref_pulse (from jesd_sysref_sync)
 adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
                                          $NUM_OF_CONVERTERS \
                                          $SAMPLES_PER_FRAME \

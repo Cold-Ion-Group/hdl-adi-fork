@@ -21,7 +21,7 @@
 //   0x40  EVT_WADDR     RW  event write address
 //   0x44  EVT_WDATA0    RW  event timestamp[31:0]
 //   0x48  EVT_WDATA1    RW  event timestamp[63:32]
-//   0x4C  EVT_WDATA2    RW  event {channel[15:0]@WDATA2[31:16], flags[15:0]@WDATA2[15:0]}
+//   0x4C  EVT_WDATA2    RW  event {channel[15:0], flags[15:0]}
 //   0x50  EVT_WDATA3    RW  event payload[31:0]
 //   0x54  EVT_WDATA4    RW  event payload[63:32]
 //   0x58  EVT_WDATA5    RW  event payload[95:64]
@@ -144,6 +144,7 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_TIME_RELOAD_CTRL = 8'h74;
   localparam integer TIME_RELOAD_CTRL_ARM_ON_SYSREF = 0;
   localparam integer TIME_RELOAD_CTRL_LOAD_NOW      = 1;
+  localparam        TIME_RELOAD_CTRL_LOAD_NOW_RDBK  = 1'b0;
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -424,6 +425,8 @@ module awg_timed_ctrl #(
             if (s_axi_wstrb[0]) begin
               time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF] <= s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF];
             end
+            // Re-arm is intentionally level-insensitive: each write-1 issues a
+            // fresh arm request even if software previously left CTRL[0]=1.
             if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF])
               load_sysref_req_tgl <= ~load_sysref_req_tgl;
             if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_LOAD_NOW])
@@ -544,7 +547,7 @@ module awg_timed_ctrl #(
           REG_TIME_RELOAD_HI:   s_axi_rdata <= time_reload_hi_reg;
           // CTRL[1] is a write-only write-1 pulse command (load-now), so it reads 0.
           REG_TIME_RELOAD_CTRL: s_axi_rdata <= {30'h0,
-                                                1'b0,
+                                                TIME_RELOAD_CTRL_LOAD_NOW_RDBK,
                                                 time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF]};
           REG_EVT_WADDR:    s_axi_rdata <= {{(32-EVENT_MEM_ADDR_WIDTH){1'b0}}, evt_waddr_reg};
           REG_EVT_WDATA0:   s_axi_rdata <= evt_wdata0_reg;
