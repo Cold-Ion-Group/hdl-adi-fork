@@ -195,6 +195,14 @@ ad_connect axi_ad9144_jesd_rstgen/peripheral_reset awg_timed_ctrl_0/sched_reset
 create_bd_port -dir O marker_commit
 ad_connect marker_commit awg_timed_ctrl_0/marker_commit
 
+# marker_start and marker_done are available for scope probing but are not
+# routed to top-level pins by default.  Add create_bd_port / XDC constraints
+# here when lab probing of execution boundaries is needed.
+
+# Connect awg_timed_ctrl_0 interrupt into the CPU interrupt fabric.
+# Uses mb-14 / ps-11 (adjacent to the JESD and DMA interrupts at mb-15/13).
+ad_cpu_interrupt ps-11 mb-14 awg_timed_ctrl_0/irq
+
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_tpl/link_clk
 ad_connect  axi_ad9144_jesd/tx_data axi_ad9144_tpl/link
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_upack/clk
