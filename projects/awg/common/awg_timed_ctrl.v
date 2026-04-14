@@ -144,7 +144,6 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_TIME_RELOAD_CTRL = 8'h74;
   localparam integer TIME_RELOAD_CTRL_ARM_ON_SYSREF = 0;
   localparam integer TIME_RELOAD_CTRL_LOAD_NOW      = 1;
-  localparam        TIME_RELOAD_CTRL_LOAD_NOW_RDBK  = 1'b0;
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -291,6 +290,9 @@ module awg_timed_ctrl #(
   wire [31:0]  reinit_count_next_gray = reinit_count_next ^ (reinit_count_next >> 1);
   wire [31:0]  reinit_reject_next = reinit_reject_sched + 1'b1;
   wire [31:0]  reinit_reject_next_gray = reinit_reject_next ^ (reinit_reject_next >> 1);
+  wire         reinit_spacing_violation = ev_flags[0] && prev_phase_reinit;
+  wire [7:0]   spacing_error_code = reinit_spacing_violation ? ERR_REINIT_SPACING :
+                                                              ERR_SPACING_VIOLATION;
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
 
@@ -546,8 +548,7 @@ module awg_timed_ctrl #(
           REG_TIME_RELOAD_LO:   s_axi_rdata <= time_reload_lo_reg;
           REG_TIME_RELOAD_HI:   s_axi_rdata <= time_reload_hi_reg;
           // CTRL[1] is a write-only write-1 pulse command (load-now), so it reads 0.
-          REG_TIME_RELOAD_CTRL: s_axi_rdata <= {30'h0,
-                                                TIME_RELOAD_CTRL_LOAD_NOW_RDBK,
+          REG_TIME_RELOAD_CTRL: s_axi_rdata <= {31'h0,
                                                 time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF]};
           REG_EVT_WADDR:    s_axi_rdata <= {{(32-EVENT_MEM_ADDR_WIDTH){1'b0}}, evt_waddr_reg};
           REG_EVT_WDATA0:   s_axi_rdata <= evt_wdata0_reg;
@@ -875,8 +876,7 @@ module awg_timed_ctrl #(
               // Timestamp reached: check spacing before firing
               if (read_ptr > 0 &&
                   (ev_ts - prev_ts) < MIN_SPACING_VAL) begin
-                error_code          <= (ev_flags[0] && prev_phase_reinit) ?
-                                       ERR_REINIT_SPACING : ERR_SPACING_VIOLATION;
+                error_code          <= spacing_error_code;
                 if (ev_flags[0]) begin
                   reinit_reject_sched <= reinit_reject_next;
                   reinit_reject_gray_sched <= reinit_reject_next_gray;
@@ -885,8 +885,7 @@ module awg_timed_ctrl #(
                 irq_sched[IRQ_SPACING_VIOLATION] <= 1'b1;
                 engine_state        <= ENGINE_ERROR;
                 status_sched_snap   <= {16'h0,
-                                        (ev_flags[0] && prev_phase_reinit) ?
-                                        ERR_REINIT_SPACING : ERR_SPACING_VIOLATION,
+                                        spacing_error_code,
                                         12'h0,
                                         1'b1, 1'b0, 1'b0, 1'b0};
                 cur_event_snap      <= read_ptr;
