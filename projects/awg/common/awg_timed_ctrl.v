@@ -538,6 +538,7 @@ module awg_timed_ctrl #(
           REG_IRQ_ENABLE:   s_axi_rdata <= irq_enable_reg;
           REG_TIME_RELOAD_LO:   s_axi_rdata <= time_reload_lo_reg;
           REG_TIME_RELOAD_HI:   s_axi_rdata <= time_reload_hi_reg;
+          // CTRL[1] is a write-1 pulse command (load-now), so it always reads 0.
           REG_TIME_RELOAD_CTRL: s_axi_rdata <= {30'h0, 1'b0, time_reload_ctrl_reg[0]};
           REG_EVT_WADDR:    s_axi_rdata <= {{(32-EVENT_MEM_ADDR_WIDTH){1'b0}}, evt_waddr_reg};
           REG_EVT_WDATA0:   s_axi_rdata <= evt_wdata0_reg;
