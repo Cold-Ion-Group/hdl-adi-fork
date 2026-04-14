@@ -103,6 +103,18 @@ External 122.88 MHz differential
 | Frequency | fDAC / (K × S) | JESD204B §5.3.3.5 |
 | Auto-tune | Safety net | `fmcdac_sysref_tune()` only activates if alignment error detected |
 
+### Scheduler epoch-anchor procedure (Subclass-1 deterministic timestamps)
+
+To make `awg_timed_ctrl` timestamps reproducible across power cycles:
+
+1. Write `TIME_RELOAD_LO = 0x00000000`, `TIME_RELOAD_HI = 0x00000000`.
+2. Write `TIME_RELOAD_CTRL[0] = 1` (arm load-on-next-SYSREF).
+3. Wait for the next synchronized `sysref_pulse`.
+4. Read `TIME_NOW_HI:TIME_NOW_LO` and confirm it is near zero.
+
+`TIME_RELOAD_CTRL[1] = 1` remains available for immediate software-forced epoch
+loads without waiting for SYSREF.
+
 ## Startup Sequence
 
 ```

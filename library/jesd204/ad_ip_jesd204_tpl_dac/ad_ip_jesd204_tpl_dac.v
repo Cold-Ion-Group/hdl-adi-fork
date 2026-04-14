@@ -69,6 +69,11 @@ module ad_ip_jesd204_tpl_dac #(
   input dac_sync_in,
   output dac_sync_manual_req_out,
   input dac_sync_manual_req_in,
+  input [NUM_CHANNELS*16-1:0] sched_scale_s,
+  input [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_init_s,
+  input [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_incr_s,
+  input [NUM_CHANNELS-1:0] sched_apply_s,
+  input sched_phase_reinit,
 
   // axi interface
 
@@ -127,6 +132,12 @@ module ad_ip_jesd204_tpl_dac #(
   wire [NUM_CHANNELS*16-1:0] dac_iqcor_coeff_1;
   wire [NUM_CHANNELS*16-1:0] dac_iqcor_coeff_2;
   wire [NUM_CHANNELS*8-1:0] dac_src_chan_sel;
+  wire [NUM_CHANNELS*16-1:0] dac_dds_scale_0_mux_s;
+  wire [NUM_CHANNELS*DDS_PHASE_DW-1:0] dac_dds_init_0_mux_s;
+  wire [NUM_CHANNELS*DDS_PHASE_DW-1:0] dac_dds_incr_0_mux_s;
+  wire [NUM_CHANNELS*16-1:0] dac_dds_scale_1_mux_s;
+  wire [NUM_CHANNELS*DDS_PHASE_DW-1:0] dac_dds_init_1_mux_s;
+  wire [NUM_CHANNELS*DDS_PHASE_DW-1:0] dac_dds_incr_1_mux_s;
 
   reg [LINK_DATA_WIDTH-1:0] dac_ddata_cr;
 
@@ -244,15 +255,15 @@ module ad_ip_jesd204_tpl_dac #(
     .dac_ext_sync_disarm (dac_ext_sync_disarm),
     .dac_sync_in_status (dac_sync_in_status),
     .dac_sync_in (dac_sync_in),
-    .dac_sync_manual_req (dac_sync_manual_req_in),
+    .dac_sync_manual_req (dac_sync_manual_req_in | sched_phase_reinit),
     .dac_dds_format (dac_dds_format),
 
-    .dac_dds_scale_0 (dac_dds_scale_0_s),
-    .dac_dds_init_0 (dac_dds_init_0_s),
-    .dac_dds_incr_0 (dac_dds_incr_0_s),
-    .dac_dds_scale_1 (dac_dds_scale_1_s),
-    .dac_dds_init_1 (dac_dds_init_1_s),
-    .dac_dds_incr_1 (dac_dds_incr_1_s),
+    .dac_dds_scale_0 (dac_dds_scale_0_mux_s),
+    .dac_dds_init_0 (dac_dds_init_0_mux_s),
+    .dac_dds_incr_0 (dac_dds_incr_0_mux_s),
+    .dac_dds_scale_1 (dac_dds_scale_1_mux_s),
+    .dac_dds_init_1 (dac_dds_init_1_mux_s),
+    .dac_dds_incr_1 (dac_dds_incr_1_mux_s),
     .dac_pat_data_0 (dac_pat_data_0_s),
     .dac_pat_data_1 (dac_pat_data_1_s),
     .dac_data_sel (dac_data_sel_s),
@@ -263,6 +274,24 @@ module ad_ip_jesd204_tpl_dac #(
     .dac_iqcor_coeff_2 (dac_iqcor_coeff_2),
 
     .dac_src_chan_sel (dac_src_chan_sel));
+
+  genvar ch;
+  generate
+    for (ch = 0; ch < NUM_CHANNELS; ch = ch + 1) begin : g_sched_dds_mux
+      assign dac_dds_scale_0_mux_s[16*ch +: 16] =
+        sched_apply_s[ch] ? sched_scale_s[16*ch +: 16] : dac_dds_scale_0_s[16*ch +: 16];
+      assign dac_dds_init_0_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
+        sched_apply_s[ch] ? sched_init_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_init_0_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
+      assign dac_dds_incr_0_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
+        sched_apply_s[ch] ? sched_incr_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_incr_0_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
+      assign dac_dds_scale_1_mux_s[16*ch +: 16] =
+        sched_apply_s[ch] ? sched_scale_s[16*ch +: 16] : dac_dds_scale_1_s[16*ch +: 16];
+      assign dac_dds_init_1_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
+        sched_apply_s[ch] ? sched_init_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_init_1_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
+      assign dac_dds_incr_1_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
+        sched_apply_s[ch] ? sched_incr_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_incr_1_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
+    end
+  endgenerate
 
   // Drop DMA padding bits from the LSB or MSB based on configuration
   integer i;
