@@ -99,17 +99,30 @@ module ad_ip_jesd204_tpl_dac_core #(
   wire [DAC_CDW-1:0] pn15_data;
 
   wire [LINK_DATA_WIDTH-1:0] dac_ddata_int;
+  reg dac_sync_manual_req_delayed;
 
   assign link_valid = 1'b1;
   assign dac_sync_in_status = dac_sync_armed;
+
+  always @(posedge clk) begin
+    // Clear the delayed pulse in both cases:
+    // 1) software sync already requested (`dac_sync`)
+    // 2) ext-sync state explicitly disarmed (`dac_ext_sync_disarm`)
+    // so stale manual requests cannot be replayed.
+    if (dac_sync || dac_ext_sync_disarm) begin
+      dac_sync_manual_req_delayed <= 1'b0;
+    end else begin
+      dac_sync_manual_req_delayed <= dac_sync_manual_req;
+    end
+  end
 
   util_ext_sync #(
     .ENABLED (EXT_SYNC)
   ) i_util_ext_sync (
     .clk (clk),
-    .ext_sync_arm (dac_ext_sync_arm),
+    .ext_sync_arm (dac_ext_sync_arm | dac_sync_manual_req),
     .ext_sync_disarm (dac_ext_sync_disarm),
-    .sync_in (dac_sync_in | dac_sync_manual_req),
+    .sync_in (dac_sync_in | dac_sync_manual_req_delayed),
     .sync_armed (dac_sync_armed));
 
   // Sync either from external or software source

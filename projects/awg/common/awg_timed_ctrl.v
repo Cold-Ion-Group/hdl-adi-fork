@@ -684,7 +684,6 @@ module awg_timed_ctrl #(
       marker_commit <= 1'b0;
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
-      sched_apply_s <= {NUM_CHANNELS{1'b0}};
       sched_phase_reinit <= 1'b0;
 
       // -------------------------------------------------------------------
@@ -754,6 +753,7 @@ module awg_timed_ctrl #(
         prev_ts            <= 64'h0;
         prev_phase_reinit  <= 1'b0;
         time_reload_arm_sched <= 1'b0;
+        sched_apply_s      <= {NUM_CHANNELS{1'b0}};
         // Send cleared status snapshot to AXI domain
         status_sched_snap   <= 32'h0;
         cur_event_snap      <= 32'h0;
@@ -768,6 +768,7 @@ module awg_timed_ctrl #(
         cur_event_snap      <= read_ptr;
         irq_snap            <= irq_sched;
         last_exec_sched_snap <= last_exec_sched;
+        sched_apply_s       <= {NUM_CHANNELS{1'b0}};
         status_snap_tgl     <= ~status_snap_tgl;
 
       end else begin
@@ -779,6 +780,7 @@ module awg_timed_ctrl #(
         if (arm_edge && run_edge) begin
           if (engine_state == ENGINE_IDLE) begin
             event_count_sched <= event_count_s2;
+            sched_apply_s     <= {NUM_CHANNELS{1'b0}};
             if (event_count_s2 > 0) begin
               read_ptr       <= 32'h0;
               prev_ts        <= 64'h0;
@@ -805,6 +807,7 @@ module awg_timed_ctrl #(
           if (arm_edge) begin
             if (engine_state == ENGINE_IDLE) begin
               event_count_sched <= event_count_s2;
+              sched_apply_s     <= {NUM_CHANNELS{1'b0}};
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};

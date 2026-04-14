@@ -308,6 +308,9 @@ For scheduled DDS override events, payload bits are interpreted as:
 
 `flags[0]` is the PHASE_REINIT request bit.
 
+Current scheduler binding drives the same scheduled `{scale,init,incr}` values
+into DDS tone 0 and tone 1 for the selected channel.
+
 #### Clocking / CDC contract
 
 - **Scheduler execution clock domain:** `util_awg_xcvr/tx_out_clk_0`.
@@ -366,7 +369,5 @@ enabled. Software clears bits in `IRQ_STATUS` with RW1C writes.
 
 #### Deferred items (future PRs)
 
-- **Step 4 (TPL DDS wiring):** `sched_*` bundle from `awg_timed_ctrl_0` to
-  `axi_ad9144_tpl`; changes to `library/jesd204/ad_ip_jesd204_tpl_dac/`.
 - **Step 6 (quality gates):** cocotb directed test (N events, spacing violation,
   missed deadline); SBY liveness on CDC handshake pairs; IP-XACT packaging.
