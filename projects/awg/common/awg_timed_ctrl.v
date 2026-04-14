@@ -21,7 +21,7 @@
 //   0x40  EVT_WADDR     RW  event write address
 //   0x44  EVT_WDATA0    RW  event timestamp[31:0]
 //   0x48  EVT_WDATA1    RW  event timestamp[63:32]
-//   0x4C  EVT_WDATA2    RW  event {channel[31:16], flags[15:0]}
+//   0x4C  EVT_WDATA2    RW  event {channel[15:0]@WDATA2[31:16], flags[15:0]@WDATA2[15:0]}
 //   0x50  EVT_WDATA3    RW  event payload[31:0]
 //   0x54  EVT_WDATA4    RW  event payload[63:32]
 //   0x58  EVT_WDATA5    RW  event payload[95:64]

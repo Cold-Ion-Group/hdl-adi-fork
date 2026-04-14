@@ -278,7 +278,7 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `0x44AA0040` | `0x40` | `EVT_WADDR` | RW | `0` | Event write address |
 | `0x44AA0044` | `0x44` | `EVT_WDATA0` | RW | `0` | Event `timestamp[31:0]` |
 | `0x44AA0048` | `0x48` | `EVT_WDATA1` | RW | `0` | Event `timestamp[63:32]` |
-| `0x44AA004C` | `0x4C` | `EVT_WDATA2` | RW | `0` | Event write format `{channel[31:16], flags[15:0]}` |
+| `0x44AA004C` | `0x4C` | `EVT_WDATA2` | RW | `0` | Event write format `{channel[15:0]@WDATA2[31:16], flags[15:0]@WDATA2[15:0]}` |
 | `0x44AA0050` | `0x50` | `EVT_WDATA3` | RW | `0` | Event `payload[31:0]` |
 | `0x44AA0054` | `0x54` | `EVT_WDATA4` | RW | `0` | Event `payload[63:32]` |
 | `0x44AA0058` | `0x58` | `EVT_WDATA5` | RW | `0` | Event `payload[95:64]` |
