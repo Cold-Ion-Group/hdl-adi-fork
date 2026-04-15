@@ -15,8 +15,8 @@
 //   0x28  LAST_EXEC_LO  RO  timestamp of last successfully fired event [31:0]
 //   0x2C  LAST_EXEC_HI  RO  timestamp of last successfully fired event [63:32]
 //   0x30  COMMIT_COUNT  RO  number of events successfully fired
-//   0x34  REINIT_COUNT  RO  reserved (0, Step-5 placeholder)
-//   0x38  REINIT_REJECT RO  reserved (0, Step-5 placeholder)
+//   0x34  REINIT_COUNT  RO  number of successful PHASE_REINIT events
+//   0x38  REINIT_REJECT RO  number of rejected PHASE_REINIT events
 //   0x3C  IRQ_STATUS    RW1C [0]=done, [1]=error, [2]=spacing_violation, [3]=underrun
 //   0x40  EVT_WADDR     RW  event write address
 //   0x44  EVT_WDATA0    RW  event timestamp[31:0]
@@ -29,6 +29,9 @@
 //   0x60  EVT_WCTRL     WO  bit0=push (latch WDATA0-6 into event_mem[WADDR])
 //   0x64  IRQ_ENABLE    RW  optional per-bit enable mask for IRQ_STATUS
 //   0x68  IP_SCRATCH    RW  read-back scratch register
+//   0x6C  TIME_RELOAD_LO   RW  pending scheduler epoch reload value [31:0]
+//   0x70  TIME_RELOAD_HI   RW  pending scheduler epoch reload value [63:32]
+//   0x74  TIME_RELOAD_CTRL RW  [0]=load on next SYSREF, [1]=load now (pulse)
 //
 // Event word layout (256 bits):
 //   [63:0]   timestamp (64b)
@@ -51,14 +54,14 @@
 //   DONE/ERROR -> (stay until stop/reset_soft)
 //
 // Deferred (future PRs):
-//   Step 3: SYSREF-qualified timebase reset + TIME_RELOAD registers
 //   Step 4: TPL DDS scheduled-control port wiring (library/jesd204/)
-//   Step 5: PHASE_REINIT binding and REINIT_COUNT registers
 //   Step 6: Cocotb tests, SBY liveness, IP-XACT packaging
 
 module awg_timed_ctrl #(
   parameter integer EVENT_MEM_ADDR_WIDTH = 8,
-  parameter integer MIN_SPACING_TICKS    = 8
+  parameter integer MIN_SPACING_TICKS    = 8,
+  parameter integer NUM_CHANNELS         = 8,
+  parameter integer DDS_PHASE_DW         = 32
 ) (
   // AXI4-Lite slave
   input  wire        s_axi_aclk,
@@ -83,10 +86,16 @@ module awg_timed_ctrl #(
   // Scheduler clock domain
   input  wire        sched_clk,
   input  wire        sched_reset,
+  input  wire        sysref_pulse,
   // Marker outputs (sched_clk domain, 1-cycle active-high pulses)
   output reg         marker_commit,  // pulses once per fired event
   output reg         marker_start,   // pulses when engine begins execution
   output reg         marker_done,    // pulses when all events complete
+  output reg  [NUM_CHANNELS*16-1:0]           sched_scale_s,
+  output reg  [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_init_s,
+  output reg  [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_incr_s,
+  output reg  [NUM_CHANNELS-1:0]              sched_apply_s,
+  output reg                                  sched_phase_reinit,
   // Interrupt (s_axi_aclk domain, level-high while pending & enabled)
   output wire        irq
 );
@@ -130,6 +139,11 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_EVT_WCTRL    = 8'h60;
   localparam [7:0] REG_IRQ_ENABLE   = 8'h64;
   localparam [7:0] REG_IP_SCRATCH   = 8'h68;
+  localparam [7:0] REG_TIME_RELOAD_LO   = 8'h6C;
+  localparam [7:0] REG_TIME_RELOAD_HI   = 8'h70;
+  localparam [7:0] REG_TIME_RELOAD_CTRL = 8'h74;
+  localparam integer TIME_RELOAD_CTRL_ARM_ON_SYSREF = 0;
+  localparam integer TIME_RELOAD_CTRL_LOAD_NOW      = 1;
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -151,6 +165,7 @@ module awg_timed_ctrl #(
   localparam [7:0] ERR_NONE              = 8'h00;
   localparam [7:0] ERR_MISSED_DEADLINE   = 8'h01;
   localparam [7:0] ERR_SPACING_VIOLATION = 8'h02;
+  localparam [7:0] ERR_REINIT_SPACING    = 8'h03;
 
   // Minimum spacing as a 64-bit constant for safe comparison
   localparam [63:0] MIN_SPACING_VAL = MIN_SPACING_TICKS;
@@ -163,6 +178,9 @@ module awg_timed_ctrl #(
   reg [31:0] irq_enable_reg;
   reg [31:0] irq_status_axi;    // RW1C; bits OR'd in from sched snapshots
   reg [31:0] event_count_cfg;   // writable only when !armed && !running
+  reg [31:0] time_reload_lo_reg;
+  reg [31:0] time_reload_hi_reg;
+  reg [31:0] time_reload_ctrl_reg;
   reg [EVENT_MEM_ADDR_WIDTH-1:0] evt_waddr_reg;
   reg [31:0] evt_wdata0_reg, evt_wdata1_reg, evt_wdata2_reg;
   reg [31:0] evt_wdata3_reg, evt_wdata4_reg, evt_wdata5_reg, evt_wdata6_reg;
@@ -171,8 +189,12 @@ module awg_timed_ctrl #(
   reg [31:0] status_shadow;
   reg [63:0] last_exec_shadow;
   reg [31:0] commit_count_shadow;
+  reg [31:0] reinit_count_shadow;
+  reg [31:0] reinit_reject_shadow;
   reg [31:0] cur_event_shadow;
   reg [31:0] commit_count_gray_sync1, commit_count_gray_sync2;
+  reg [31:0] reinit_count_gray_sync1, reinit_count_gray_sync2;
+  reg [31:0] reinit_reject_gray_sync1, reinit_reject_gray_sync2;
 
   // TIME_NOW best-effort 2-FF sync (debug only)
   reg [31:0] time_now_lo_s1, time_now_lo_s2;
@@ -183,6 +205,7 @@ module awg_timed_ctrl #(
   // ---------------------------------------------------------------------------
   // Toggle regs toggled by AXI writes; synced in sched domain
   reg arm_req_tgl, run_req_tgl, stop_req_tgl, sreset_req_tgl;
+  reg load_sysref_req_tgl, load_now_req_tgl;
   reg event_wr_req_tgl;
   // Data transferred alongside event_wr_req_tgl
   reg [EVENT_MEM_ADDR_WIDTH-1:0] event_wr_addr_cfg;
@@ -213,7 +236,11 @@ module awg_timed_ctrl #(
   reg run_req_sync1,    run_req_sync2,    run_req_sync2_d;
   reg stop_req_sync1,   stop_req_sync2,   stop_req_sync2_d;
   reg sreset_req_sync1, sreset_req_sync2, sreset_req_sync2_d;
+  reg load_sysref_req_sync1, load_sysref_req_sync2, load_sysref_req_sync2_d;
+  reg load_now_req_sync1, load_now_req_sync2, load_now_req_sync2_d;
   reg event_wr_req_sync1, event_wr_req_sync2, event_wr_req_sync2_d;
+  reg [31:0] time_reload_lo_s1, time_reload_lo_s2;
+  reg [31:0] time_reload_hi_s1, time_reload_hi_s2;
   // event_count_cfg 2-FF direct sync to sched domain
   reg [31:0] event_count_s1, event_count_s2;
 
@@ -227,10 +254,16 @@ module awg_timed_ctrl #(
   reg [63:0] last_exec_sched;
   reg [31:0] commit_count_sched;
   reg [31:0] commit_count_gray_sched;
+  reg [31:0] reinit_count_sched;
+  reg [31:0] reinit_count_gray_sched;
+  reg [31:0] reinit_reject_sched;
+  reg [31:0] reinit_reject_gray_sched;
   reg [63:0] prev_ts;            // timestamp of previous fired event (spacing check)
+  reg        prev_phase_reinit;
   reg [7:0]  error_code;
   reg [3:0]  irq_sched;          // sticky IRQ bits in sched domain
   reg        compare_first;      // high on the first cycle in ENGINE_COMPARE
+  reg        time_reload_arm_sched;
 
   // BRAM: no synchronous reset; relies on power-up initialisation.
   // The (* ram_style = "block" *) attribute prevents Vivado inferring a
@@ -253,6 +286,13 @@ module awg_timed_ctrl #(
   wire [31:0]  cur_event_next = read_ptr + 1'b1;
   wire [31:0]  commit_count_next = commit_count_sched + 1'b1;
   wire [31:0]  commit_count_next_gray = commit_count_next ^ (commit_count_next >> 1);
+  wire [31:0]  reinit_count_next = reinit_count_sched + 1'b1;
+  wire [31:0]  reinit_count_next_gray = reinit_count_next ^ (reinit_count_next >> 1);
+  wire [31:0]  reinit_reject_next = reinit_reject_sched + 1'b1;
+  wire [31:0]  reinit_reject_next_gray = reinit_reject_next ^ (reinit_reject_next >> 1);
+  wire         reinit_spacing_violation = ev_flags[0] && prev_phase_reinit;
+  wire [7:0]   spacing_error_code = reinit_spacing_violation ? ERR_REINIT_SPACING :
+                                                              ERR_SPACING_VIOLATION;
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
 
@@ -292,6 +332,9 @@ module awg_timed_ctrl #(
       irq_enable_reg     <= 32'h0;
       irq_status_axi     <= 32'h0;
       event_count_cfg    <= 32'h0;
+      time_reload_lo_reg <= 32'h0;
+      time_reload_hi_reg <= 32'h0;
+      time_reload_ctrl_reg <= 32'h0;
       evt_waddr_reg      <= {EVENT_MEM_ADDR_WIDTH{1'b0}};
       evt_wdata0_reg     <= 32'h0;
       evt_wdata1_reg     <= 32'h0;
@@ -304,15 +347,23 @@ module awg_timed_ctrl #(
       run_req_tgl        <= 1'b0;
       stop_req_tgl       <= 1'b0;
       sreset_req_tgl     <= 1'b0;
+      load_sysref_req_tgl <= 1'b0;
+      load_now_req_tgl   <= 1'b0;
       event_wr_req_tgl   <= 1'b0;
       event_wr_addr_cfg  <= {EVENT_MEM_ADDR_WIDTH{1'b0}};
       event_wr_data_cfg  <= 256'h0;
       status_shadow      <= 32'h0;
       last_exec_shadow   <= 64'h0;
       commit_count_shadow <= 32'h0;
+      reinit_count_shadow <= 32'h0;
+      reinit_reject_shadow <= 32'h0;
       cur_event_shadow   <= 32'h0;
       commit_count_gray_sync1 <= 32'h0;
       commit_count_gray_sync2 <= 32'h0;
+      reinit_count_gray_sync1 <= 32'h0;
+      reinit_count_gray_sync2 <= 32'h0;
+      reinit_reject_gray_sync1 <= 32'h0;
+      reinit_reject_gray_sync2 <= 32'h0;
       status_snap_sync1  <= 1'b0;
       status_snap_sync2  <= 1'b0;
       status_snap_sync2_d <= 1'b0;
@@ -359,6 +410,29 @@ module awg_timed_ctrl #(
               if (s_axi_wstrb[2]) event_count_cfg[23:16] <= s_axi_wdata[23:16];
               if (s_axi_wstrb[3]) event_count_cfg[31:24] <= s_axi_wdata[31:24];
             end
+          end
+          REG_TIME_RELOAD_LO: begin
+            if (s_axi_wstrb[0]) time_reload_lo_reg[7:0]   <= s_axi_wdata[7:0];
+            if (s_axi_wstrb[1]) time_reload_lo_reg[15:8]  <= s_axi_wdata[15:8];
+            if (s_axi_wstrb[2]) time_reload_lo_reg[23:16] <= s_axi_wdata[23:16];
+            if (s_axi_wstrb[3]) time_reload_lo_reg[31:24] <= s_axi_wdata[31:24];
+          end
+          REG_TIME_RELOAD_HI: begin
+            if (s_axi_wstrb[0]) time_reload_hi_reg[7:0]   <= s_axi_wdata[7:0];
+            if (s_axi_wstrb[1]) time_reload_hi_reg[15:8]  <= s_axi_wdata[15:8];
+            if (s_axi_wstrb[2]) time_reload_hi_reg[23:16] <= s_axi_wdata[23:16];
+            if (s_axi_wstrb[3]) time_reload_hi_reg[31:24] <= s_axi_wdata[31:24];
+          end
+          REG_TIME_RELOAD_CTRL: begin
+            if (s_axi_wstrb[0]) begin
+              time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF] <= s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF];
+            end
+            // Re-arm is intentionally level-insensitive: each write-1 issues a
+            // fresh arm request even if software previously left CTRL[0]=1.
+            if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF])
+              load_sysref_req_tgl <= ~load_sysref_req_tgl;
+            if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_LOAD_NOW])
+              load_now_req_tgl    <= ~load_now_req_tgl;
           end
           REG_IRQ_STATUS: begin
             // RW1C: writing a 1 to a bit clears it
@@ -466,11 +540,16 @@ module awg_timed_ctrl #(
           REG_LAST_EXEC_LO: s_axi_rdata <= last_exec_shadow[31:0];
           REG_LAST_EXEC_HI: s_axi_rdata <= last_exec_shadow[63:32];
           REG_COMMIT_COUNT: s_axi_rdata <= commit_count_shadow;
-          REG_REINIT_COUNT: s_axi_rdata <= 32'h0;
-          REG_REINIT_REJECT:s_axi_rdata <= 32'h0;
+          REG_REINIT_COUNT: s_axi_rdata <= reinit_count_shadow;
+          REG_REINIT_REJECT:s_axi_rdata <= reinit_reject_shadow;
           REG_IRQ_STATUS:   s_axi_rdata <= irq_status_axi;
           REG_IP_SCRATCH:   s_axi_rdata <= scratch_reg;
           REG_IRQ_ENABLE:   s_axi_rdata <= irq_enable_reg;
+          REG_TIME_RELOAD_LO:   s_axi_rdata <= time_reload_lo_reg;
+          REG_TIME_RELOAD_HI:   s_axi_rdata <= time_reload_hi_reg;
+          // CTRL[1] is a write-only write-1 pulse command (load-now), so it reads 0.
+          REG_TIME_RELOAD_CTRL: s_axi_rdata <= {31'h0,
+                                                time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF]};
           REG_EVT_WADDR:    s_axi_rdata <= {{(32-EVENT_MEM_ADDR_WIDTH){1'b0}}, evt_waddr_reg};
           REG_EVT_WDATA0:   s_axi_rdata <= evt_wdata0_reg;
           REG_EVT_WDATA1:   s_axi_rdata <= evt_wdata1_reg;
@@ -503,6 +582,12 @@ module awg_timed_ctrl #(
       commit_count_gray_sync1 <= commit_count_gray_sched;
       commit_count_gray_sync2 <= commit_count_gray_sync1;
       commit_count_shadow     <= gray2bin32(commit_count_gray_sync2);
+      reinit_count_gray_sync1 <= reinit_count_gray_sched;
+      reinit_count_gray_sync2 <= reinit_count_gray_sync1;
+      reinit_count_shadow     <= gray2bin32(reinit_count_gray_sync2);
+      reinit_reject_gray_sync1 <= reinit_reject_gray_sched;
+      reinit_reject_gray_sync2 <= reinit_reject_gray_sync1;
+      reinit_reject_shadow     <= gray2bin32(reinit_reject_gray_sync2);
 
       // Event-write ack (only used for future event_count tracking)
       event_wr_ack_sync1   <= event_wr_ack_tgl;
@@ -546,9 +631,19 @@ module awg_timed_ctrl #(
       sreset_req_sync1   <= 1'b0;
       sreset_req_sync2   <= 1'b0;
       sreset_req_sync2_d <= 1'b0;
+      load_sysref_req_sync1 <= 1'b0;
+      load_sysref_req_sync2 <= 1'b0;
+      load_sysref_req_sync2_d <= 1'b0;
+      load_now_req_sync1 <= 1'b0;
+      load_now_req_sync2 <= 1'b0;
+      load_now_req_sync2_d <= 1'b0;
       event_wr_req_sync1   <= 1'b0;
       event_wr_req_sync2   <= 1'b0;
       event_wr_req_sync2_d <= 1'b0;
+      time_reload_lo_s1 <= 32'h0;
+      time_reload_lo_s2 <= 32'h0;
+      time_reload_hi_s1 <= 32'h0;
+      time_reload_hi_s2 <= 32'h0;
       event_count_s1   <= 32'h0;
       event_count_s2   <= 32'h0;
       status_snap_tgl  <= 1'b0;
@@ -560,13 +655,24 @@ module awg_timed_ctrl #(
       last_exec_sched     <= 64'h0;
       commit_count_sched  <= 32'h0;
       commit_count_gray_sched <= 32'h0;
+      reinit_count_sched <= 32'h0;
+      reinit_count_gray_sched <= 32'h0;
+      reinit_reject_sched <= 32'h0;
+      reinit_reject_gray_sched <= 32'h0;
       prev_ts             <= 64'h0;
+      prev_phase_reinit   <= 1'b0;
       error_code          <= ERR_NONE;
       irq_sched           <= 4'h0;
       compare_first       <= 1'b0;
+      time_reload_arm_sched <= 1'b0;
       marker_commit       <= 1'b0;
       marker_start        <= 1'b0;
       marker_done         <= 1'b0;
+      sched_scale_s       <= {(NUM_CHANNELS*16){1'b0}};
+      sched_init_s        <= {(NUM_CHANNELS*DDS_PHASE_DW){1'b0}};
+      sched_incr_s        <= {(NUM_CHANNELS*DDS_PHASE_DW){1'b0}};
+      sched_apply_s       <= {NUM_CHANNELS{1'b0}};
+      sched_phase_reinit  <= 1'b0;
       status_sched_snap   <= 32'h0;
       last_exec_sched_snap <= 64'h0;
       cur_event_snap      <= 32'h0;
@@ -578,6 +684,7 @@ module awg_timed_ctrl #(
       marker_commit <= 1'b0;
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
+      sched_phase_reinit <= 1'b0;
 
       // -------------------------------------------------------------------
       // CDC sync chains: AXI -> sched
@@ -597,14 +704,36 @@ module awg_timed_ctrl #(
       sreset_req_sync1   <= sreset_req_tgl;
       sreset_req_sync2   <= sreset_req_sync1;
       sreset_req_sync2_d <= sreset_req_sync2;
+      load_sysref_req_sync1   <= load_sysref_req_tgl;
+      load_sysref_req_sync2   <= load_sysref_req_sync1;
+      load_sysref_req_sync2_d <= load_sysref_req_sync2;
+      load_now_req_sync1   <= load_now_req_tgl;
+      load_now_req_sync2   <= load_now_req_sync1;
+      load_now_req_sync2_d <= load_now_req_sync2;
 
       event_wr_req_sync1   <= event_wr_req_tgl;
       event_wr_req_sync2   <= event_wr_req_sync1;
       event_wr_req_sync2_d <= event_wr_req_sync2;
 
+      time_reload_lo_s1 <= time_reload_lo_reg;
+      time_reload_lo_s2 <= time_reload_lo_s1;
+      time_reload_hi_s1 <= time_reload_hi_reg;
+      time_reload_hi_s2 <= time_reload_hi_s1;
+
       // event_count_cfg 2-FF direct sync (stable well before ARM fires)
       event_count_s1 <= event_count_cfg;
       event_count_s2 <= event_count_s1;
+
+      if (load_now_req_sync2 ^ load_now_req_sync2_d) begin
+        sched_time_counter <= {time_reload_hi_s2, time_reload_lo_s2};
+      end
+      if (load_sysref_req_sync2 ^ load_sysref_req_sync2_d) begin
+        time_reload_arm_sched <= 1'b1;
+      end
+      if (time_reload_arm_sched && sysref_pulse) begin
+        sched_time_counter <= {time_reload_hi_s2, time_reload_lo_s2};
+        time_reload_arm_sched <= 1'b0;
+      end
 
       // -------------------------------------------------------------------
       // Command edge detection (priority: sreset > stop > arm/run > engine)
@@ -615,9 +744,16 @@ module awg_timed_ctrl #(
         read_ptr           <= 32'h0;
         commit_count_sched <= 32'h0;
         commit_count_gray_sched <= 32'h0;
+        reinit_count_sched <= 32'h0;
+        reinit_count_gray_sched <= 32'h0;
+        reinit_reject_sched <= 32'h0;
+        reinit_reject_gray_sched <= 32'h0;
         irq_sched          <= 4'h0;
         error_code         <= ERR_NONE;
         prev_ts            <= 64'h0;
+        prev_phase_reinit  <= 1'b0;
+        time_reload_arm_sched <= 1'b0;
+        sched_apply_s      <= {NUM_CHANNELS{1'b0}};
         // Send cleared status snapshot to AXI domain
         status_sched_snap   <= 32'h0;
         cur_event_snap      <= 32'h0;
@@ -632,6 +768,7 @@ module awg_timed_ctrl #(
         cur_event_snap      <= read_ptr;
         irq_snap            <= irq_sched;
         last_exec_sched_snap <= last_exec_sched;
+        sched_apply_s       <= {NUM_CHANNELS{1'b0}};
         status_snap_tgl     <= ~status_snap_tgl;
 
       end else begin
@@ -643,9 +780,11 @@ module awg_timed_ctrl #(
         if (arm_edge && run_edge) begin
           if (engine_state == ENGINE_IDLE) begin
             event_count_sched <= event_count_s2;
+            sched_apply_s     <= {NUM_CHANNELS{1'b0}};
             if (event_count_s2 > 0) begin
               read_ptr       <= 32'h0;
               prev_ts        <= 64'h0;
+              prev_phase_reinit <= 1'b0;
               engine_state   <= ENGINE_WAIT_FETCH;
               marker_start   <= 1'b1;
               // Snapshot: running=1
@@ -668,6 +807,7 @@ module awg_timed_ctrl #(
           if (arm_edge) begin
             if (engine_state == ENGINE_IDLE) begin
               event_count_sched <= event_count_s2;
+              sched_apply_s     <= {NUM_CHANNELS{1'b0}};
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
               status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
@@ -685,6 +825,7 @@ module awg_timed_ctrl #(
             if (engine_state == ENGINE_ARMED && event_count_sched > 0) begin
               read_ptr       <= 32'h0;
               prev_ts        <= 64'h0;
+              prev_phase_reinit <= 1'b0;
               engine_state   <= ENGINE_WAIT_FETCH;
               marker_start   <= 1'b1;
               // Snapshot: running=1
@@ -719,6 +860,10 @@ module awg_timed_ctrl #(
             if (compare_first && ev_ts < sched_time_counter) begin
               // Missed deadline: timestamp was already in the past on arrival
               error_code          <= ERR_MISSED_DEADLINE;
+              if (ev_flags[0]) begin
+                reinit_reject_sched <= reinit_reject_next;
+                reinit_reject_gray_sched <= reinit_reject_next_gray;
+              end
               irq_sched[IRQ_ERROR]  <= 1'b1;
               irq_sched[IRQ_UNDERRUN] <= 1'b1;
               engine_state        <= ENGINE_ERROR;
@@ -734,11 +879,17 @@ module awg_timed_ctrl #(
               // Timestamp reached: check spacing before firing
               if (read_ptr > 0 &&
                   (ev_ts - prev_ts) < MIN_SPACING_VAL) begin
-                error_code          <= ERR_SPACING_VIOLATION;
+                error_code          <= spacing_error_code;
+                if (ev_flags[0]) begin
+                  reinit_reject_sched <= reinit_reject_next;
+                  reinit_reject_gray_sched <= reinit_reject_next_gray;
+                end
                 irq_sched[IRQ_ERROR]             <= 1'b1;
                 irq_sched[IRQ_SPACING_VIOLATION] <= 1'b1;
                 engine_state        <= ENGINE_ERROR;
-                status_sched_snap   <= {16'h0, ERR_SPACING_VIOLATION, 12'h0,
+                status_sched_snap   <= {16'h0,
+                                        spacing_error_code,
+                                        12'h0,
                                         1'b1, 1'b0, 1'b0, 1'b0};
                 cur_event_snap      <= read_ptr;
                 irq_snap            <= irq_sched | 4'b0110;
@@ -756,8 +907,20 @@ module awg_timed_ctrl #(
             marker_commit      <= 1'b1;
             commit_count_sched <= commit_count_next;
             commit_count_gray_sched <= commit_count_next_gray;
+            if (ev_flags[0]) begin
+              reinit_count_sched <= reinit_count_next;
+              reinit_count_gray_sched <= reinit_count_next_gray;
+              sched_phase_reinit <= 1'b1;
+            end
+            if (ev_ch < NUM_CHANNELS) begin
+              sched_scale_s[16*ev_ch +: 16] <= ev_payload[15:0];
+              sched_init_s[DDS_PHASE_DW*ev_ch +: DDS_PHASE_DW] <= ev_payload[16 +: DDS_PHASE_DW];
+              sched_incr_s[DDS_PHASE_DW*ev_ch +: DDS_PHASE_DW] <= ev_payload[16 + DDS_PHASE_DW +: DDS_PHASE_DW];
+              sched_apply_s[ev_ch] <= 1'b1;
+            end
             last_exec_sched    <= ev_ts;
             prev_ts            <= ev_ts;
+            prev_phase_reinit  <= ev_flags[0];
             // Snapshot every FIRE so firmware polling sees progress before DONE.
             status_sched_snap    <= {16'h0, ERR_NONE, 12'h0,
                                      1'b0, 1'b0, 1'b1, 1'b0};

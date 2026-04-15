@@ -272,8 +272,8 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `0x44AA0028` | `0x28` | `LAST_EXEC_LO` | RO | `0` | Timestamp of last successfully fired event `[31:0]` |
 | `0x44AA002C` | `0x2C` | `LAST_EXEC_HI` | RO | `0` | Timestamp of last successfully fired event `[63:32]` |
 | `0x44AA0030` | `0x30` | `COMMIT_COUNT` | RO | `0` | Number of events successfully fired |
-| `0x44AA0034` | `0x34` | `REINIT_COUNT` | RO | `0` | Reserved (Step-5 placeholder) |
-| `0x44AA0038` | `0x38` | `REINIT_REJECT` | RO | `0` | Reserved (Step-5 placeholder) |
+| `0x44AA0034` | `0x34` | `REINIT_COUNT` | RO | `0` | Number of successful fired events with `flags[0]` (PHASE_REINIT) |
+| `0x44AA0038` | `0x38` | `REINIT_REJECT` | RO | `0` | Number of rejected PHASE_REINIT events (deadline miss or spacing rejection) |
 | `0x44AA003C` | `0x3C` | `IRQ_STATUS` | RW1C | `0` | `[0]`=done, `[1]`=error, `[2]`=spacing\_violation, `[3]`=underrun |
 | `0x44AA0040` | `0x40` | `EVT_WADDR` | RW | `0` | Event write address |
 | `0x44AA0044` | `0x44` | `EVT_WDATA0` | RW | `0` | Event `timestamp[31:0]` |
@@ -286,6 +286,9 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `0x44AA0060` | `0x60` | `EVT_WCTRL` | WO | — | `bit0` write-1 pushes `WDATA0-6` into `event_mem[WADDR]` |
 | `0x44AA0064` | `0x64` | `IRQ_ENABLE` | RW | `0` | Optional per-bit enable mask for `IRQ_STATUS` |
 | `0x44AA0068` | `0x68` | `IP_SCRATCH` | RW | `0` | Read-back scratch register |
+| `0x44AA006C` | `0x6C` | `TIME_RELOAD_LO` | RW | `0` | Pending scheduler epoch reload value `[31:0]` |
+| `0x44AA0070` | `0x70` | `TIME_RELOAD_HI` | RW | `0` | Pending scheduler epoch reload value `[63:32]` |
+| `0x44AA0074` | `0x74` | `TIME_RELOAD_CTRL` | RW | `0` | `[0]`=load on next SYSREF, `[1]`=load now |
 
 #### Event word layout (256 bits stored per slot)
 
@@ -296,6 +299,17 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `[95:80]` | flags (16 b) | `EVT_WDATA2[15:0]` |
 | `[223:96]` | payload (128 b) | `EVT_WDATA6..EVT_WDATA3` |
 | `[255:224]` | reserved | always 0 |
+
+For scheduled DDS override events, payload bits are interpreted as:
+
+- `payload[15:0]`   → ASF/scale
+- `payload[47:16]`  → POW/init (32-bit phase word)
+- `payload[79:48]`  → FTW/incr (32-bit phase increment word)
+
+`flags[0]` is the PHASE_REINIT request bit.
+
+Current scheduler binding drives the same scheduled `{scale,init,incr}` values
+into DDS tone 0 and tone 1 for the selected channel.
 
 #### Clocking / CDC contract
 
@@ -326,6 +340,8 @@ ADVANCE --(last event)--> DONE
 ```
 
 `DONE` and `ERROR` are terminal until a `stop` or `reset_soft` command is issued.
+Current late-event policy is **halt-on-miss**: `ERR_MISSED_DEADLINE` transitions
+to `ERROR` immediately.
 
 #### Error codes (`STATUS[15:8]`)
 
@@ -334,6 +350,7 @@ ADVANCE --(last event)--> DONE
 | `0x00` | ERR\_NONE | No error |
 | `0x01` | ERR\_MISSED\_DEADLINE | Event timestamp was already in the past when fetched |
 | `0x02` | ERR\_SPACING\_VIOLATION | Gap between consecutive timestamps < `MIN_SPACING_TICKS` |
+| `0x03` | ERR\_REINIT\_SPACING | Consecutive PHASE\_REINIT events violate minimum spacing |
 
 #### Interrupt output
 
@@ -352,11 +369,5 @@ enabled. Software clears bits in `IRQ_STATUS` with RW1C writes.
 
 #### Deferred items (future PRs)
 
-- **Step 3 (timebase):** SYSREF-qualified `sched_time_counter` reset;
-  `TIME_RELOAD_LO/HI/CTRL` registers for firmware epoch anchoring.
-- **Step 4 (TPL DDS wiring):** `sched_*` bundle from `awg_timed_ctrl_0` to
-  `axi_ad9144_tpl`; changes to `library/jesd204/ad_ip_jesd204_tpl_dac/`.
-- **Step 5 (PHASE_REINIT):** REINIT\_COUNT / REINIT\_REJECT\_COUNT diagnostic
-  registers; single-link\_clk PHASE_REINIT pulse aligned to LMFC.
 - **Step 6 (quality gates):** cocotb directed test (N events, spacing violation,
   missed deadline); SBY liveness on CDC handshake pairs; IP-XACT packaging.

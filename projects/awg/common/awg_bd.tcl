@@ -69,13 +69,11 @@ adi_axi_jesd204_tx_create axi_ad9144_jesd $NUM_OF_LANES $NUM_LINKS
 #     - axi_ad9144_tpl/link               (AXIS toward JESD TX link layer)
 #     - axi_ad9144_tpl/dac_dunf
 #     - axi_ad9144_tpl/dac_enable_<i>, axi_ad9144_tpl/dac_valid_<i>, axi_ad9144_tpl/dac_data_<i>
-#   Internal-only TPL core control pins (exist on axi_ad9144_tpl/dac_tpl_core,
-#   but are not exported by this hierarchy in adi_tpl_jesd204_tx_create):
-#     - dac_sync_in
-#     - dac_sync_manual_req_in
-#     - dac_sync_manual_req_out
-# These internal-only pins are therefore not currently routable at the project BD
-# level unless the TPL hierarchy creation procedure is extended.
+#   Extended scheduled-control pins exported at hierarchy boundary:
+#     - sched_scale_s / sched_init_s / sched_incr_s / sched_apply_s
+#     - sched_phase_reinit
+#   Scheduler epoch anchor input:
+#     - sysref_pulse (from jesd_sysref_sync)
 adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
                                          $NUM_OF_CONVERTERS \
                                          $SAMPLES_PER_FRAME \
@@ -84,6 +82,7 @@ adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
 # 32-bit DDS phase width → ≤ 0.25 Hz frequency resolution at 983 MSPS
 # The TPL core is wrapped in a hierarchy; the actual IP is at .../dac_tpl_core
 ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.DDS_PHASE_DW 32
+ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.EXT_SYNC 1
 
 ad_ip_instance util_upack2 axi_ad9144_upack [list \
   NUM_OF_CHANNELS $NUM_OF_CONVERTERS \
@@ -186,11 +185,16 @@ ad_connect jesd_sysref_sync/sysref_pulse axi_ad9144_jesd/sysref
 ad_connect jesd_sysref_sync/sync_out axi_ad9144_jesd/sync
 
 create_bd_cell -type module -reference awg_timed_ctrl awg_timed_ctrl_0
+set_property -dict [list \
+  CONFIG.NUM_CHANNELS $NUM_OF_CONVERTERS \
+  CONFIG.DDS_PHASE_DW 32 \
+] [get_bd_cells awg_timed_ctrl_0]
 
 ad_connect sys_cpu_clk awg_timed_ctrl_0/s_axi_aclk
 ad_connect sys_cpu_resetn awg_timed_ctrl_0/s_axi_aresetn
 ad_connect util_awg_xcvr/tx_out_clk_0 awg_timed_ctrl_0/sched_clk
 ad_connect axi_ad9144_jesd_rstgen/peripheral_reset awg_timed_ctrl_0/sched_reset
+ad_connect jesd_sysref_sync/sysref_pulse awg_timed_ctrl_0/sysref_pulse
 
 create_bd_port -dir O marker_commit
 ad_connect marker_commit awg_timed_ctrl_0/marker_commit
@@ -205,6 +209,11 @@ ad_cpu_interrupt ps-11 mb-14 awg_timed_ctrl_0/irq
 
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_tpl/link_clk
 ad_connect  axi_ad9144_jesd/tx_data axi_ad9144_tpl/link
+ad_connect awg_timed_ctrl_0/sched_scale_s axi_ad9144_tpl/sched_scale_s
+ad_connect awg_timed_ctrl_0/sched_init_s axi_ad9144_tpl/sched_init_s
+ad_connect awg_timed_ctrl_0/sched_incr_s axi_ad9144_tpl/sched_incr_s
+ad_connect awg_timed_ctrl_0/sched_apply_s axi_ad9144_tpl/sched_apply_s
+ad_connect awg_timed_ctrl_0/sched_phase_reinit axi_ad9144_tpl/sched_phase_reinit
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_upack/clk
 ad_connect  axi_ad9144_jesd_rstgen/peripheral_reset axi_ad9144_upack/reset
 #ad_connect  axi_ad9144_tpl/dac_dunf axi_ad9144_upack/fifo_rd_underflow

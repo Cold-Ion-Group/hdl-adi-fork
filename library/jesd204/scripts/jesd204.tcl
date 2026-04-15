@@ -225,6 +225,8 @@ proc adi_tpl_jesd204_tx_create {ip_name num_of_lanes num_of_converters samples_p
 
   # datapath width = L * 8 * TPL_BYTES_PER_BEAT / (M * N)
   set samples_per_channel [expr ($num_of_lanes * 8 * $tpl_bytes_per_beat) / ($num_of_converters * $sample_width)];
+  # AWG scheduler integration currently uses DDS_PHASE_DW=32.
+  set dds_phase_dw 32
 
 
   startgroup
@@ -241,6 +243,11 @@ proc adi_tpl_jesd204_tx_create {ip_name num_of_lanes num_of_converters samples_p
     # Interface to link layer
     create_bd_pin -dir I -type clk "${ip_name}/link_clk"
     create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:axis_rtl:1.0 "${ip_name}/link"
+    create_bd_pin -dir I -from [expr $num_of_converters * 16 - 1] -to 0 "${ip_name}/sched_scale_s"
+    create_bd_pin -dir I -from [expr $num_of_converters * $dds_phase_dw - 1] -to 0 "${ip_name}/sched_init_s"
+    create_bd_pin -dir I -from [expr $num_of_converters * $dds_phase_dw - 1] -to 0 "${ip_name}/sched_incr_s"
+    create_bd_pin -dir I -from [expr $num_of_converters - 1] -to 0 "${ip_name}/sched_apply_s"
+    create_bd_pin -dir I "${ip_name}/sched_phase_reinit"
 
     # Interface to application layer
     create_bd_pin -dir I "${ip_name}/dac_dunf"
@@ -298,6 +305,11 @@ proc adi_tpl_jesd204_tx_create {ip_name num_of_lanes num_of_converters samples_p
     # TPL - link layer
     ad_connect ${ip_name}/dac_tpl_core/link_clk ${ip_name}/link_clk
     ad_connect ${ip_name}/dac_tpl_core/link ${ip_name}/link
+    ad_connect ${ip_name}/sched_scale_s ${ip_name}/dac_tpl_core/sched_scale_s
+    ad_connect ${ip_name}/sched_init_s ${ip_name}/dac_tpl_core/sched_init_s
+    ad_connect ${ip_name}/sched_incr_s ${ip_name}/dac_tpl_core/sched_incr_s
+    ad_connect ${ip_name}/sched_apply_s ${ip_name}/dac_tpl_core/sched_apply_s
+    ad_connect ${ip_name}/sched_phase_reinit ${ip_name}/dac_tpl_core/sched_phase_reinit
 
     # TPL - app layer
     if {$num_of_converters > 1} {
@@ -488,5 +500,3 @@ proc adi_jesd204_calc_tpl_width {link_datapath_width jesd_l jesd_m jesd_s jesd_n
   }
 
 }
-
-
