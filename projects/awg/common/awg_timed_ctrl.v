@@ -1,4 +1,5 @@
 // awg_timed_ctrl.v -- AWG timed-control AXI-Lite peripheral
+`timescale 1ns/1ps
 //
 // Register map (offset from base, 32-bit aligned):
 //   0x00  CTRL          RW  [0]=run(pulse), [1]=arm(pulse), [2]=stop(pulse),
@@ -64,47 +65,85 @@ module awg_timed_ctrl #(
   parameter integer DDS_PHASE_DW         = 32
 ) (
   // AXI4-Lite slave
+  (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 s_axi_aclk CLK" *)
+  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axi, ASSOCIATED_RESET s_axi_aresetn" *)
   input  wire        s_axi_aclk,
+  (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 s_axi_aresetn RST" *)
+  (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
   input  wire        s_axi_aresetn,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi AWADDR" *)
   input  wire [7:0]  s_axi_awaddr,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi AWPROT" *)
+  input  wire [2:0]  s_axi_awprot,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi AWVALID" *)
   input  wire        s_axi_awvalid,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi AWREADY" *)
   output reg         s_axi_awready,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi WDATA" *)
   input  wire [31:0] s_axi_wdata,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi WSTRB" *)
   input  wire [3:0]  s_axi_wstrb,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi WVALID" *)
   input  wire        s_axi_wvalid,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi WREADY" *)
   output reg         s_axi_wready,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi BRESP" *)
   output reg  [1:0]  s_axi_bresp,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi BVALID" *)
   output reg         s_axi_bvalid,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi BREADY" *)
   input  wire        s_axi_bready,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi ARADDR" *)
   input  wire [7:0]  s_axi_araddr,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi ARPROT" *)
+  input  wire [2:0]  s_axi_arprot,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi ARVALID" *)
   input  wire        s_axi_arvalid,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi ARREADY" *)
   output reg         s_axi_arready,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi RDATA" *)
   output reg  [31:0] s_axi_rdata,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi RRESP" *)
   output reg  [1:0]  s_axi_rresp,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi RVALID" *)
   output reg         s_axi_rvalid,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi RREADY" *)
   input  wire        s_axi_rready,
   // Scheduler clock domain
+  (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 sched_clk CLK" *)
+  (* X_INTERFACE_PARAMETER = "ASSOCIATED_RESET sched_reset" *)
   input  wire        sched_clk,
+  (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 sched_reset RST" *)
+  (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
   input  wire        sched_reset,
+  (* X_INTERFACE_IGNORE = "true" *)
   input  wire        sysref_pulse,
   // Marker outputs (sched_clk domain, 1-cycle active-high pulses)
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg         marker_commit,  // pulses once per fired event
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg         marker_start,   // pulses when engine begins execution
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg         marker_done,    // pulses when all events complete
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg  [NUM_CHANNELS*16-1:0]           sched_scale_s,
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg  [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_init_s,
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg  [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_incr_s,
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg  [NUM_CHANNELS-1:0]              sched_apply_s,
+  (* X_INTERFACE_IGNORE = "true" *)
   output reg                                  sched_phase_reinit,
   // Interrupt (s_axi_aclk domain, level-high while pending & enabled)
+  (* X_INTERFACE_INFO = "xilinx.com:signal:interrupt:1.0 irq INTERRUPT" *)
+  (* X_INTERFACE_PARAMETER = "SENSITIVITY LEVEL_HIGH" *)
   output wire        irq
 );
 
   // ---------------------------------------------------------------------------
   // Local parameters
   // ---------------------------------------------------------------------------
-  localparam integer EVENT_MEM_DEPTH = (1 << EVENT_MEM_ADDR_WIDTH);
-
   // IP identification
   localparam [31:0] IP_ID_VAL      = 32'h41574753;  // "AWGS"
   localparam [31:0] IP_VERSION_VAL = 32'h00010000;  // major=1, minor=0
@@ -181,6 +220,11 @@ module awg_timed_ctrl #(
   reg [31:0] time_reload_lo_reg;
   reg [31:0] time_reload_hi_reg;
   reg [31:0] time_reload_ctrl_reg;
+  reg        aw_captured;
+  reg [7:0]  awaddr_captured;
+  reg        w_captured;
+  reg [31:0] wdata_captured;
+  reg [3:0]  wstrb_captured;
   reg [EVENT_MEM_ADDR_WIDTH-1:0] evt_waddr_reg;
   reg [31:0] evt_wdata0_reg, evt_wdata1_reg, evt_wdata2_reg;
   reg [31:0] evt_wdata3_reg, evt_wdata4_reg, evt_wdata5_reg, evt_wdata6_reg;
@@ -192,12 +236,17 @@ module awg_timed_ctrl #(
   reg [31:0] reinit_count_shadow;
   reg [31:0] reinit_reject_shadow;
   reg [31:0] cur_event_shadow;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] commit_count_gray_sync1, commit_count_gray_sync2;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] reinit_count_gray_sync1, reinit_count_gray_sync2;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] reinit_reject_gray_sync1, reinit_reject_gray_sync2;
 
   // TIME_NOW best-effort 2-FF sync (debug only)
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] time_now_lo_s1, time_now_lo_s2;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] time_now_hi_s1, time_now_hi_s2;
 
   // ---------------------------------------------------------------------------
@@ -226,22 +275,43 @@ module awg_timed_ctrl #(
   // ---------------------------------------------------------------------------
   // AXI-domain CDC sync chains
   // ---------------------------------------------------------------------------
-  reg status_snap_sync1,   status_snap_sync2,   status_snap_sync2_d;
-  reg event_wr_ack_sync1,  event_wr_ack_sync2,  event_wr_ack_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg status_snap_sync1,   status_snap_sync2;
+  reg status_snap_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg event_wr_ack_sync1,  event_wr_ack_sync2;
+  reg event_wr_ack_sync2_d;
 
   // ---------------------------------------------------------------------------
   // Sched-domain CDC sync chains
   // ---------------------------------------------------------------------------
-  reg arm_req_sync1,    arm_req_sync2,    arm_req_sync2_d;
-  reg run_req_sync1,    run_req_sync2,    run_req_sync2_d;
-  reg stop_req_sync1,   stop_req_sync2,   stop_req_sync2_d;
-  reg sreset_req_sync1, sreset_req_sync2, sreset_req_sync2_d;
-  reg load_sysref_req_sync1, load_sysref_req_sync2, load_sysref_req_sync2_d;
-  reg load_now_req_sync1, load_now_req_sync2, load_now_req_sync2_d;
-  reg event_wr_req_sync1, event_wr_req_sync2, event_wr_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg arm_req_sync1,    arm_req_sync2;
+  reg arm_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg run_req_sync1,    run_req_sync2;
+  reg run_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg stop_req_sync1,   stop_req_sync2;
+  reg stop_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg sreset_req_sync1, sreset_req_sync2;
+  reg sreset_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg load_sysref_req_sync1, load_sysref_req_sync2;
+  reg load_sysref_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg load_now_req_sync1, load_now_req_sync2;
+  reg load_now_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg event_wr_req_sync1, event_wr_req_sync2;
+  reg event_wr_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] time_reload_lo_s1, time_reload_lo_s2;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] time_reload_hi_s1, time_reload_hi_s2;
   // event_count_cfg 2-FF direct sync to sched domain
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] event_count_s1, event_count_s2;
 
   // ---------------------------------------------------------------------------
@@ -269,13 +339,20 @@ module awg_timed_ctrl #(
   // The (* ram_style = "block" *) attribute prevents Vivado inferring a
   // synchronous-reset for-loop over BRAM outputs (UltraScale BRAM does not
   // support a synchronous reset on the data output).
-  (* ram_style = "block" *) reg [255:0] event_mem [0:EVENT_MEM_DEPTH-1];
+  (* ram_style = "block" *) reg [255:0] event_mem [0:(1 << EVENT_MEM_ADDR_WIDTH)-1];
   reg [255:0] fetch_data;   // registered BRAM output (1-cycle read latency)
 
   // ---------------------------------------------------------------------------
   // Combinational helpers
   // ---------------------------------------------------------------------------
-  wire write_fire = s_axi_awvalid && s_axi_wvalid && s_axi_awready && s_axi_wready;
+  wire aw_fire = s_axi_awvalid && s_axi_awready;
+  wire w_fire  = s_axi_wvalid && s_axi_wready;
+  wire write_have_addr = aw_captured || aw_fire;
+  wire write_have_data = w_captured || w_fire;
+  wire write_issue = write_have_addr && write_have_data && !s_axi_bvalid;
+  wire [7:0]  write_addr = aw_captured ? awaddr_captured : s_axi_awaddr;
+  wire [31:0] write_data = w_captured ? wdata_captured : s_axi_wdata;
+  wire [3:0]  write_strb = w_captured ? wstrb_captured : s_axi_wstrb;
   wire read_fire  = s_axi_arvalid && s_axi_arready;
 
   // Current event fields decoded from fetch_data
@@ -291,8 +368,7 @@ module awg_timed_ctrl #(
   wire [31:0]  reinit_reject_next = reinit_reject_sched + 1'b1;
   wire [31:0]  reinit_reject_next_gray = reinit_reject_next ^ (reinit_reject_next >> 1);
   wire         reinit_spacing_violation = ev_flags[0] && prev_phase_reinit;
-  wire [7:0]   spacing_error_code = reinit_spacing_violation ? ERR_REINIT_SPACING :
-                                                              ERR_SPACING_VIOLATION;
+  wire [7:0]   spacing_error_code = reinit_spacing_violation ? 8'h03 : 8'h02;
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
 
@@ -335,6 +411,11 @@ module awg_timed_ctrl #(
       time_reload_lo_reg <= 32'h0;
       time_reload_hi_reg <= 32'h0;
       time_reload_ctrl_reg <= 32'h0;
+      aw_captured        <= 1'b0;
+      awaddr_captured    <= 8'h0;
+      w_captured         <= 1'b0;
+      wdata_captured     <= 32'h0;
+      wstrb_captured     <= 4'h0;
       evt_waddr_reg      <= {EVENT_MEM_ADDR_WIDTH{1'b0}};
       evt_wdata0_reg     <= 32'h0;
       evt_wdata1_reg     <= 32'h0;
@@ -376,121 +457,140 @@ module awg_timed_ctrl #(
       time_now_hi_s2     <= 32'h0;
     end else begin
       // AXI B-channel drain
-      if (s_axi_bvalid && s_axi_bready) s_axi_bvalid <= 1'b0;
+      if (s_axi_bvalid && s_axi_bready) begin
+        s_axi_bvalid  <= 1'b0;
+        s_axi_awready <= 1'b1;
+        s_axi_wready  <= 1'b1;
+      end
       if (s_axi_rvalid && s_axi_rready) s_axi_rvalid <= 1'b0;
 
       // -----------------------------------------------------------------------
       // Write path
       // -----------------------------------------------------------------------
-      if (write_fire && !s_axi_bvalid) begin
+      if (aw_fire) begin
+        aw_captured     <= 1'b1;
+        awaddr_captured <= s_axi_awaddr;
+        s_axi_awready   <= 1'b0;
+      end
+
+      if (w_fire) begin
+        w_captured     <= 1'b1;
+        wdata_captured <= s_axi_wdata;
+        wstrb_captured <= s_axi_wstrb;
+        s_axi_wready   <= 1'b0;
+      end
+
+      if (write_issue) begin
         s_axi_bvalid <= 1'b1;
-        case (s_axi_awaddr)
+        aw_captured  <= 1'b0;
+        w_captured   <= 1'b0;
+        case (write_addr)
           REG_IP_SCRATCH: begin
-            if (s_axi_wstrb[0]) scratch_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) scratch_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) scratch_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) scratch_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) scratch_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) scratch_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) scratch_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) scratch_reg[31:24] <= write_data[31:24];
           end
           REG_CTRL: begin
             // [3:0] are write-1-to-pulse command bits (auto-clear on readback)
-            if (s_axi_wstrb[0]) begin
-              if (s_axi_wdata[0]) run_req_tgl    <= ~run_req_tgl;
-              if (s_axi_wdata[1]) arm_req_tgl    <= ~arm_req_tgl;
-              if (s_axi_wdata[2]) stop_req_tgl   <= ~stop_req_tgl;
-              if (s_axi_wdata[3]) sreset_req_tgl <= ~sreset_req_tgl;
+            if (write_strb[0]) begin
+              if (write_data[0]) run_req_tgl    <= ~run_req_tgl;
+              if (write_data[1]) arm_req_tgl    <= ~arm_req_tgl;
+              if (write_data[2]) stop_req_tgl   <= ~stop_req_tgl;
+              if (write_data[3]) sreset_req_tgl <= ~sreset_req_tgl;
             end
             // [8] = irq_en is sticky RW
-            if (s_axi_wstrb[1]) irq_en_reg <= s_axi_wdata[8];
+            if (write_strb[1]) irq_en_reg <= write_data[8];
           end
           REG_EVENT_COUNT: begin
             // Only accept writes when engine is idle (not armed/running)
             if (!status_shadow[0] && !status_shadow[1]) begin
-              if (s_axi_wstrb[0]) event_count_cfg[7:0]   <= s_axi_wdata[7:0];
-              if (s_axi_wstrb[1]) event_count_cfg[15:8]  <= s_axi_wdata[15:8];
-              if (s_axi_wstrb[2]) event_count_cfg[23:16] <= s_axi_wdata[23:16];
-              if (s_axi_wstrb[3]) event_count_cfg[31:24] <= s_axi_wdata[31:24];
+              if (write_strb[0]) event_count_cfg[7:0]   <= write_data[7:0];
+              if (write_strb[1]) event_count_cfg[15:8]  <= write_data[15:8];
+              if (write_strb[2]) event_count_cfg[23:16] <= write_data[23:16];
+              if (write_strb[3]) event_count_cfg[31:24] <= write_data[31:24];
             end
           end
           REG_TIME_RELOAD_LO: begin
-            if (s_axi_wstrb[0]) time_reload_lo_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) time_reload_lo_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) time_reload_lo_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) time_reload_lo_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) time_reload_lo_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) time_reload_lo_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) time_reload_lo_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) time_reload_lo_reg[31:24] <= write_data[31:24];
           end
           REG_TIME_RELOAD_HI: begin
-            if (s_axi_wstrb[0]) time_reload_hi_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) time_reload_hi_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) time_reload_hi_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) time_reload_hi_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) time_reload_hi_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) time_reload_hi_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) time_reload_hi_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) time_reload_hi_reg[31:24] <= write_data[31:24];
           end
           REG_TIME_RELOAD_CTRL: begin
-            if (s_axi_wstrb[0]) begin
-              time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF] <= s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF];
+            if (write_strb[0]) begin
+              time_reload_ctrl_reg[TIME_RELOAD_CTRL_ARM_ON_SYSREF] <= write_data[TIME_RELOAD_CTRL_ARM_ON_SYSREF];
             end
             // Re-arm is intentionally level-insensitive: each write-1 issues a
             // fresh arm request even if software previously left CTRL[0]=1.
-            if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_ARM_ON_SYSREF])
+            if (write_strb[0] && write_data[TIME_RELOAD_CTRL_ARM_ON_SYSREF])
               load_sysref_req_tgl <= ~load_sysref_req_tgl;
-            if (s_axi_wstrb[0] && s_axi_wdata[TIME_RELOAD_CTRL_LOAD_NOW])
+            if (write_strb[0] && write_data[TIME_RELOAD_CTRL_LOAD_NOW])
               load_now_req_tgl    <= ~load_now_req_tgl;
           end
           REG_IRQ_STATUS: begin
             // RW1C: writing a 1 to a bit clears it
-            if (s_axi_wstrb[0]) irq_status_axi[7:0] <= irq_status_axi[7:0] & ~s_axi_wdata[7:0];
+            if (write_strb[0]) irq_status_axi[7:0] <= irq_status_axi[7:0] & ~write_data[7:0];
           end
           REG_IRQ_ENABLE: begin
-            if (s_axi_wstrb[0]) irq_enable_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) irq_enable_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) irq_enable_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) irq_enable_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) irq_enable_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) irq_enable_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) irq_enable_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) irq_enable_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WADDR: begin
-            evt_waddr_reg <= s_axi_wdata[EVENT_MEM_ADDR_WIDTH-1:0];
+            evt_waddr_reg <= write_data[EVENT_MEM_ADDR_WIDTH-1:0];
           end
           REG_EVT_WDATA0: begin
-            if (s_axi_wstrb[0]) evt_wdata0_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata0_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata0_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata0_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata0_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata0_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata0_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata0_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WDATA1: begin
-            if (s_axi_wstrb[0]) evt_wdata1_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata1_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata1_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata1_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata1_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata1_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata1_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata1_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WDATA2: begin
-            if (s_axi_wstrb[0]) evt_wdata2_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata2_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata2_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata2_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata2_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata2_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata2_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata2_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WDATA3: begin
-            if (s_axi_wstrb[0]) evt_wdata3_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata3_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata3_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata3_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata3_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata3_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata3_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata3_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WDATA4: begin
-            if (s_axi_wstrb[0]) evt_wdata4_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata4_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata4_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata4_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata4_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata4_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata4_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata4_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WDATA5: begin
-            if (s_axi_wstrb[0]) evt_wdata5_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata5_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata5_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata5_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata5_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata5_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata5_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata5_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WDATA6: begin
-            if (s_axi_wstrb[0]) evt_wdata6_reg[7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) evt_wdata6_reg[15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) evt_wdata6_reg[23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) evt_wdata6_reg[31:24] <= s_axi_wdata[31:24];
+            if (write_strb[0]) evt_wdata6_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) evt_wdata6_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) evt_wdata6_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) evt_wdata6_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WCTRL: begin
-            if (s_axi_wstrb[0] && s_axi_wdata[0]) begin
+            if (write_strb[0] && write_data[0]) begin
               event_wr_addr_cfg <= evt_waddr_reg;
               // Pack 256-bit event word:
               //  [31:0]   = EVT_WDATA0 = timestamp[31:0]
