@@ -129,6 +129,23 @@ set fpga_voltage_list {0 5000} ;# 0 to 5000mV
 
 ## ***************************************************************************
 
+proc adi_device_spec_encode {mapping_list raw_value param} {
+
+  foreach entry $mapping_list {
+    set label [lindex $entry 0]
+    set code [lindex $entry 1]
+
+    if {[string equal -length [string length $label] $label $raw_value]} {
+      return $code
+    }
+  }
+
+  puts "CRITICAL WARNING: Unsupported $param value \"$raw_value\"; using encoded Unknown value."
+  return [lindex [lindex $mapping_list 0] 1]
+}
+
+## ***************************************************************************
+
 proc adi_device_spec {cellpath param} {
 
   set list_pointer [string tolower $param]
@@ -153,39 +170,26 @@ proc adi_device_spec {cellpath param} {
                  exit -1
              }
           }
-          return "$series_name"
+          return [adi_device_spec_encode $fpga_technology_list $series_name $param]
       }
       FPGA_FAMILY {
           set fpga_family [get_property FAMILY $part]
-          foreach i $fpga_family_list {
-              regexp ^[lindex $i 0] $fpga_family matched
-          }
-          return "$matched"
+          return [adi_device_spec_encode $fpga_family_list $fpga_family $param]
       }
       SPEED_GRADE {
           set speed_grade [get_property SPEED $part]
-          return "$speed_grade"
+          return [adi_device_spec_encode $speed_grade_list $speed_grade $param]
       }
       DEV_PACKAGE {
           set dev_package [get_property PACKAGE $part]
-          foreach i $dev_package_list {
-              regexp ^[lindex $i 0] $dev_package matched
-          }
-          return "$matched"
+          return [adi_device_spec_encode $dev_package_list $dev_package $param]
       }
       XCVR_TYPE {
-          set matched ""
           set dev_transcivers "none"
           foreach x [list_property $part] {
               regexp ^GT..._TRANSCEIVERS $x dev_transcivers
           }
-          foreach i $xcvr_type_list {
-              regexp ^[lindex $i 0] $dev_transcivers matched
-          }
-          if { $matched eq "" } {
-               puts "CRITICAL WARNING: \"$dev_transcivers\" TYPE IS NOT SUPPORTED BY ADI!"
-          }
-          return "$matched"
+          return [adi_device_spec_encode $xcvr_type_list $dev_transcivers $param]
       }
       FPGA_VOLTAGE {
           set fpga_voltage [get_property REF_OPERATING_VOLTAGE $part]
