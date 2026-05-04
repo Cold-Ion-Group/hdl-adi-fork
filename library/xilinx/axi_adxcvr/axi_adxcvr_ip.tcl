@@ -3,6 +3,12 @@
 source ../../../scripts/adi_env.tcl
 source $ad_hdl_dir/library/scripts/adi_ip_xilinx.tcl
 
+# This IP declares its custom interfaces explicitly via adi_if_infer_bus.
+# Vivado's additional auto-inference creates conflicting bus interfaces on a
+# clean repack, which breaks downstream BD connections.
+catch {set_param ips.enableInterfaceInference false}
+catch {set_param ips.enableInterfaceArrayInference false}
+
 adi_ip_create axi_adxcvr
 adi_ip_files axi_adxcvr [list \
   "$ad_hdl_dir/library/common/up_axi.v" \
