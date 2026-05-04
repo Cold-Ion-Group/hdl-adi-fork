@@ -184,11 +184,10 @@ ad_connect tx_sync_0 jesd_sysref_sync/sync_in
 ad_connect jesd_sysref_sync/sysref_pulse axi_ad9144_jesd/sysref
 ad_connect jesd_sysref_sync/sync_out axi_ad9144_jesd/sync
 
-create_bd_cell -type module -reference awg_timed_ctrl awg_timed_ctrl_0
-set_property -dict [list \
-  CONFIG.NUM_CHANNELS $NUM_OF_CONVERTERS \
-  CONFIG.DDS_PHASE_DW 32 \
-] [get_bd_cells awg_timed_ctrl_0]
+ad_ip_instance awg_timed_ctrl awg_timed_ctrl_0 [list \
+  NUM_CHANNELS $NUM_OF_CONVERTERS \
+  DDS_PHASE_DW 32 \
+]
 
 ad_connect sys_cpu_clk awg_timed_ctrl_0/s_axi_aclk
 ad_connect sys_cpu_resetn awg_timed_ctrl_0/s_axi_aresetn

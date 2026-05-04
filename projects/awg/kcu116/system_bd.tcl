@@ -4,8 +4,12 @@ set dac_fifo_address_width 14
 
 source $ad_hdl_dir/projects/common/kcu116/kcu116_system_bd.tcl
 source $ad_hdl_dir/projects/common/xilinx/dacfifo_bd.tcl
+
+# Avoid Vivado module-reference IP-XACT slicing s_axi_wdata/rdata into bogus
+# per-bit interface arrays when packaging awg_timed_ctrl.
+catch {set_param ips.enableInterfaceArrayInference false}
+
 add_files -norecurse ../common/jesd_sysref_sync.v
-add_files -norecurse ../common/awg_timed_ctrl.v
 source ../common/awg_bd.tcl
 source $ad_hdl_dir/projects/scripts/adi_pd.tcl
 

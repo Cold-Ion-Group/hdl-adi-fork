@@ -46,7 +46,6 @@ adi_project awg_kcu116 0 [list \
 adi_project_files awg_kcu116 [list \
 "../common/awg_spi.v" \
   "../common/jesd_sysref_sync.v" \
-  "../common/awg_timed_ctrl.v" \
   "system_top.v" \
   "system_constr.xdc"\
   "$ad_hdl_dir/library/common/ad_iobuf.v" \
