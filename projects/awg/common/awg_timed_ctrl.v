@@ -33,6 +33,13 @@
 //   0x6C  TIME_RELOAD_LO   RW  pending scheduler epoch reload value [31:0]
 //   0x70  TIME_RELOAD_HI   RW  pending scheduler epoch reload value [63:32]
 //   0x74  TIME_RELOAD_CTRL RW  [0]=load on next SYSREF, [1]=load now (pulse)
+//   0x78  STREAM_CTRL    RW  [0]=mode_stream, [1]=write_overflow_sticky (W1C), [2]=eof_seen (RO)
+//   0x7C  OCCUPANCY      RO  stream FIFO occupancy in events
+//   0x80  FREE_SPACE     RO  stream FIFO free space in events
+//   0x84  LOW_WMARK      RW  stream FIFO low-watermark threshold in events
+//   0x88  STREAM_DEPTH   RO  stream FIFO usable depth in events
+//   0x8C  STREAM_PUSHES  RO  accepted stream-event pushes
+//   0x90  STREAM_STALLS  RO  cycles spent waiting on an empty stream FIFO
 //
 // Event word layout (256 bits):
 //   [63:0]   timestamp (64b)
@@ -60,6 +67,7 @@
 
 module awg_timed_ctrl #(
   parameter integer EVENT_MEM_ADDR_WIDTH = 8,
+  parameter integer STREAM_ADDR_WIDTH    = 9,
   parameter integer MIN_SPACING_TICKS    = 8,
   parameter integer NUM_CHANNELS         = 8,
   parameter integer DDS_PHASE_DW         = 32
@@ -181,8 +189,19 @@ module awg_timed_ctrl #(
   localparam [7:0] REG_TIME_RELOAD_LO   = 8'h6C;
   localparam [7:0] REG_TIME_RELOAD_HI   = 8'h70;
   localparam [7:0] REG_TIME_RELOAD_CTRL = 8'h74;
+  localparam [7:0] REG_STREAM_CTRL      = 8'h78;
+  localparam [7:0] REG_OCCUPANCY        = 8'h7C;
+  localparam [7:0] REG_FREE_SPACE       = 8'h80;
+  localparam [7:0] REG_LOW_WMARK        = 8'h84;
+  localparam [7:0] REG_STREAM_DEPTH     = 8'h88;
+  localparam [7:0] REG_STREAM_PUSHES    = 8'h8C;
+  localparam [7:0] REG_STREAM_STALLS    = 8'h90;
   localparam integer TIME_RELOAD_CTRL_ARM_ON_SYSREF = 0;
   localparam integer TIME_RELOAD_CTRL_LOAD_NOW      = 1;
+  localparam integer STREAM_CTRL_MODE_STREAM         = 0;
+  localparam integer STREAM_CTRL_WRITE_OVERFLOW      = 1;
+  localparam integer STREAM_CTRL_EOF_SEEN            = 2;
+  localparam [31:0] STREAM_DEPTH_USABLE              = (1 << STREAM_ADDR_WIDTH);
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -199,6 +218,8 @@ module awg_timed_ctrl #(
   localparam IRQ_ERROR             = 1;
   localparam IRQ_SPACING_VIOLATION = 2;
   localparam IRQ_UNDERRUN          = 3;
+  localparam IRQ_LOW_WATERMARK     = 4;
+  localparam IRQ_EMPTY_STALL       = 5;
 
   // Error codes (placed in STATUS[15:8])
   localparam [7:0] ERR_NONE              = 8'h00;
@@ -220,6 +241,11 @@ module awg_timed_ctrl #(
   reg [31:0] time_reload_lo_reg;
   reg [31:0] time_reload_hi_reg;
   reg [31:0] time_reload_ctrl_reg;
+  reg        mode_stream_cfg_reg;
+  reg        mode_stream_locked_reg;
+  reg        write_overflow_sticky_reg;
+  reg [31:0] low_wmark_reg;
+  reg [31:0] stream_pushes_reg;
   reg        aw_captured;
   reg [7:0]  awaddr_captured;
   reg        w_captured;
@@ -235,13 +261,20 @@ module awg_timed_ctrl #(
   reg [31:0] commit_count_shadow;
   reg [31:0] reinit_count_shadow;
   reg [31:0] reinit_reject_shadow;
+  reg [31:0] stream_stalls_shadow;
   reg [31:0] cur_event_shadow;
+  reg        eof_seen_shadow;
+  reg        mode_stream_active_shadow;
+  reg        stream_hold_valid_sync1;
+  reg        stream_hold_valid_shadow;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] commit_count_gray_sync1, commit_count_gray_sync2;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] reinit_count_gray_sync1, reinit_count_gray_sync2;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] reinit_reject_gray_sync1, reinit_reject_gray_sync2;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg [31:0] stream_stalls_gray_sync1, stream_stalls_gray_sync2;
 
   // TIME_NOW best-effort 2-FF sync (debug only)
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
@@ -255,6 +288,7 @@ module awg_timed_ctrl #(
   // Toggle regs toggled by AXI writes; synced in sched domain
   reg arm_req_tgl, run_req_tgl, stop_req_tgl, sreset_req_tgl;
   reg load_sysref_req_tgl, load_now_req_tgl;
+  reg stream_flush_req_tgl;
   reg event_wr_req_tgl;
   // Data transferred alongside event_wr_req_tgl
   reg [EVENT_MEM_ADDR_WIDTH-1:0] event_wr_addr_cfg;
@@ -270,7 +304,9 @@ module awg_timed_ctrl #(
   reg [31:0] status_sched_snap;
   reg [63:0] last_exec_sched_snap;
   reg [31:0] cur_event_snap;
-  reg [3:0]  irq_snap;
+  reg [5:0]  irq_snap;
+  reg        eof_seen_sched_snap;
+  reg        mode_stream_sched_snap;
 
   // ---------------------------------------------------------------------------
   // AXI-domain CDC sync chains
@@ -304,6 +340,9 @@ module awg_timed_ctrl #(
   reg load_now_req_sync1, load_now_req_sync2;
   reg load_now_req_sync2_d;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg stream_flush_req_sync1, stream_flush_req_sync2;
+  reg stream_flush_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg event_wr_req_sync1, event_wr_req_sync2;
   reg event_wr_req_sync2_d;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
@@ -313,6 +352,8 @@ module awg_timed_ctrl #(
   // event_count_cfg 2-FF direct sync to sched domain
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] event_count_s1, event_count_s2;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg mode_stream_cfg_s1, mode_stream_cfg_s2;
 
   // ---------------------------------------------------------------------------
   // Sched-domain engine state
@@ -328,12 +369,21 @@ module awg_timed_ctrl #(
   reg [31:0] reinit_count_gray_sched;
   reg [31:0] reinit_reject_sched;
   reg [31:0] reinit_reject_gray_sched;
+  reg [31:0] stream_stalls_sched;
+  reg [31:0] stream_stalls_gray_sched;
   reg [63:0] prev_ts;            // timestamp of previous fired event (spacing check)
   reg        prev_phase_reinit;
   reg [7:0]  error_code;
-  reg [3:0]  irq_sched;          // sticky IRQ bits in sched domain
+  reg [5:0]  irq_sched;          // sticky IRQ bits in sched domain
   reg        compare_first;      // high on the first cycle in ENGINE_COMPARE
   reg        time_reload_arm_sched;
+  reg        mode_stream_sched;
+  reg        stream_empty_waiting;
+  reg        stream_below_wmark_sched;
+  reg        eof_seen_sched;
+  reg        stream_hold_valid;
+  reg [1:0]  stream_fifo_m_reset_hold;
+  reg [31:0] low_wmark_s1, low_wmark_s2;
 
   // BRAM: no synchronous reset; relies on power-up initialisation.
   // The (* ram_style = "block" *) attribute prevents Vivado inferring a
@@ -341,6 +391,46 @@ module awg_timed_ctrl #(
   // support a synchronous reset on the data output).
   (* ram_style = "block" *) reg [255:0] event_mem [0:(1 << EVENT_MEM_ADDR_WIDTH)-1];
   reg [255:0] fetch_data;   // registered BRAM output (1-cycle read latency)
+  reg [255:0] stream_fetch_data; // latched stream event held across compare/fire/advance
+  reg [1:0]   stream_fifo_s_reset_hold;
+
+  wire [255:0] stream_event_word =
+    {32'h0,
+     evt_wdata6_reg,
+     evt_wdata5_reg,
+     evt_wdata4_reg,
+     evt_wdata3_reg,
+     {evt_wdata2_reg[15:0], evt_wdata2_reg[31:16]},
+     evt_wdata1_reg,
+     evt_wdata0_reg};
+
+  wire        stream_fifo_s_aresetn = s_axi_aresetn && !stream_fifo_s_reset_hold[1];
+  wire        stream_fifo_m_aresetn = !sched_reset && !stream_fifo_m_reset_hold[1];
+  wire        stream_fifo_s_ready;
+  wire        stream_fifo_s_full;
+  wire        stream_fifo_s_almost_full;
+  wire [STREAM_ADDR_WIDTH-1:0] stream_fifo_s_room;
+  wire        stream_fifo_m_valid;
+  wire        stream_fifo_m_empty;
+  wire        stream_fifo_m_almost_empty;
+  wire [STREAM_ADDR_WIDTH-1:0] stream_fifo_m_level;
+  wire [255:0] stream_fifo_m_data;
+
+  wire [31:0] stream_fifo_free_space_axi = {{(32-STREAM_ADDR_WIDTH){1'b0}}, stream_fifo_s_room};
+  wire [31:0] stream_occupancy_axi =
+    (stream_pushes_reg >= commit_count_shadow) ? (stream_pushes_reg - commit_count_shadow) : 32'h0;
+  wire [31:0] stream_free_space_axi = STREAM_DEPTH_USABLE - stream_occupancy_axi;
+  wire [31:0] low_wmark_eff = (low_wmark_reg > STREAM_DEPTH_USABLE) ? STREAM_DEPTH_USABLE : low_wmark_reg;
+  wire [31:0] low_wmark_eff_sched = (low_wmark_s2 > STREAM_DEPTH_USABLE) ? STREAM_DEPTH_USABLE : low_wmark_s2;
+  wire [31:0] stream_buffered_sched = {{(32-STREAM_ADDR_WIDTH){1'b0}}, stream_fifo_m_level} +
+                                      {{31{1'b0}}, stream_hold_valid};
+  wire        stream_prefetch_en =
+    mode_stream_sched &&
+    ((engine_state == ENGINE_WAIT_FETCH) ||
+     (engine_state == ENGINE_COMPARE) ||
+     (engine_state == ENGINE_FIRE) ||
+     (engine_state == ENGINE_ADVANCE));
+  wire        stream_fifo_m_ready = stream_prefetch_en && !stream_hold_valid;
 
   // ---------------------------------------------------------------------------
   // Combinational helpers
@@ -354,12 +444,21 @@ module awg_timed_ctrl #(
   wire [31:0] write_data = w_captured ? wdata_captured : s_axi_wdata;
   wire [3:0]  write_strb = w_captured ? wstrb_captured : s_axi_wstrb;
   wire read_fire  = s_axi_arvalid && s_axi_arready;
+  wire        stream_mode_write_sel =
+    (status_shadow[0] || status_shadow[1]) ? mode_stream_locked_reg : mode_stream_cfg_reg;
+  wire        stream_push_attempt =
+    write_issue && (write_addr == REG_EVT_WCTRL) && write_strb[0] && write_data[0] && stream_mode_write_sel;
+  wire        legacy_push_attempt =
+    write_issue && (write_addr == REG_EVT_WCTRL) && write_strb[0] && write_data[0] && !stream_mode_write_sel;
+  wire        stream_push_fire = stream_push_attempt && stream_fifo_s_ready;
 
-  // Current event fields decoded from fetch_data
-  wire [63:0]  ev_ts      = fetch_data[63:0];
-  wire [15:0]  ev_ch      = fetch_data[79:64];
-  wire [15:0]  ev_flags   = fetch_data[95:80];
-  wire [127:0] ev_payload = fetch_data[223:96];
+  wire [255:0] active_fetch_data = mode_stream_sched ? stream_fetch_data : fetch_data;
+
+  // Current event fields decoded from the active fetch word.
+  wire [63:0]  ev_ts      = active_fetch_data[63:0];
+  wire [15:0]  ev_ch      = active_fetch_data[79:64];
+  wire [15:0]  ev_flags   = active_fetch_data[95:80];
+  wire [127:0] ev_payload = active_fetch_data[223:96];
   wire [31:0]  cur_event_next = read_ptr + 1'b1;
   wire [31:0]  commit_count_next = commit_count_sched + 1'b1;
   wire [31:0]  commit_count_next_gray = commit_count_next ^ (commit_count_next >> 1);
@@ -387,8 +486,38 @@ module awg_timed_ctrl #(
     end
   endfunction
 
+  util_axis_fifo #(
+    .DATA_WIDTH(256),
+    .ADDRESS_WIDTH(STREAM_ADDR_WIDTH),
+    .ASYNC_CLK(1),
+    .M_AXIS_REGISTERED(1),
+    .TLAST_EN(0),
+    .TKEEP_EN(0)
+  ) i_stream_fifo (
+    .m_axis_aclk(sched_clk),
+    .m_axis_aresetn(stream_fifo_m_aresetn),
+    .m_axis_ready(stream_fifo_m_ready),
+    .m_axis_valid(stream_fifo_m_valid),
+    .m_axis_data(stream_fifo_m_data),
+    .m_axis_tkeep(),
+    .m_axis_tlast(),
+    .m_axis_level(stream_fifo_m_level),
+    .m_axis_empty(stream_fifo_m_empty),
+    .m_axis_almost_empty(stream_fifo_m_almost_empty),
+    .s_axis_aclk(s_axi_aclk),
+    .s_axis_aresetn(stream_fifo_s_aresetn),
+    .s_axis_ready(stream_fifo_s_ready),
+    .s_axis_valid(stream_push_attempt),
+    .s_axis_data(stream_event_word),
+    .s_axis_tkeep({32{1'b1}}),
+    .s_axis_tlast(1'b0),
+    .s_axis_room(stream_fifo_s_room),
+    .s_axis_full(stream_fifo_s_full),
+    .s_axis_almost_full(stream_fifo_s_almost_full)
+  );
+
   // Interrupt: level-high while any enabled IRQ bit is pending
-  assign irq = |(irq_status_axi[3:0] & irq_enable_reg[3:0]);
+  assign irq = |(irq_status_axi[5:0] & irq_enable_reg[5:0]);
 
   // ---------------------------------------------------------------------------
   // AXI-Lite register interface (s_axi_aclk domain)
@@ -411,6 +540,11 @@ module awg_timed_ctrl #(
       time_reload_lo_reg <= 32'h0;
       time_reload_hi_reg <= 32'h0;
       time_reload_ctrl_reg <= 32'h0;
+      mode_stream_cfg_reg <= 1'b0;
+      mode_stream_locked_reg <= 1'b0;
+      write_overflow_sticky_reg <= 1'b0;
+      low_wmark_reg      <= (STREAM_DEPTH_USABLE >> 2);
+      stream_pushes_reg  <= 32'h0;
       aw_captured        <= 1'b0;
       awaddr_captured    <= 8'h0;
       w_captured         <= 1'b0;
@@ -430,6 +564,7 @@ module awg_timed_ctrl #(
       sreset_req_tgl     <= 1'b0;
       load_sysref_req_tgl <= 1'b0;
       load_now_req_tgl   <= 1'b0;
+      stream_flush_req_tgl <= 1'b0;
       event_wr_req_tgl   <= 1'b0;
       event_wr_addr_cfg  <= {EVENT_MEM_ADDR_WIDTH{1'b0}};
       event_wr_data_cfg  <= 256'h0;
@@ -438,13 +573,20 @@ module awg_timed_ctrl #(
       commit_count_shadow <= 32'h0;
       reinit_count_shadow <= 32'h0;
       reinit_reject_shadow <= 32'h0;
+      stream_stalls_shadow <= 32'h0;
       cur_event_shadow   <= 32'h0;
+      eof_seen_shadow    <= 1'b0;
+      mode_stream_active_shadow <= 1'b0;
+      stream_hold_valid_sync1 <= 1'b0;
+      stream_hold_valid_shadow <= 1'b0;
       commit_count_gray_sync1 <= 32'h0;
       commit_count_gray_sync2 <= 32'h0;
       reinit_count_gray_sync1 <= 32'h0;
       reinit_count_gray_sync2 <= 32'h0;
       reinit_reject_gray_sync1 <= 32'h0;
       reinit_reject_gray_sync2 <= 32'h0;
+      stream_stalls_gray_sync1 <= 32'h0;
+      stream_stalls_gray_sync2 <= 32'h0;
       status_snap_sync1  <= 1'b0;
       status_snap_sync2  <= 1'b0;
       status_snap_sync2_d <= 1'b0;
@@ -455,7 +597,11 @@ module awg_timed_ctrl #(
       time_now_lo_s2     <= 32'h0;
       time_now_hi_s1     <= 32'h0;
       time_now_hi_s2     <= 32'h0;
+      stream_fifo_s_reset_hold <= 2'b11;
     end else begin
+      if (stream_fifo_s_reset_hold != 2'b00)
+        stream_fifo_s_reset_hold <= {stream_fifo_s_reset_hold[0], 1'b0};
+
       // AXI B-channel drain
       if (s_axi_bvalid && s_axi_bready) begin
         s_axi_bvalid  <= 1'b0;
@@ -495,7 +641,10 @@ module awg_timed_ctrl #(
             // [3:0] are write-1-to-pulse command bits (auto-clear on readback)
             if (write_strb[0]) begin
               if (write_data[0]) run_req_tgl    <= ~run_req_tgl;
-              if (write_data[1]) arm_req_tgl    <= ~arm_req_tgl;
+              if (write_data[1]) begin
+                arm_req_tgl <= ~arm_req_tgl;
+                mode_stream_locked_reg <= mode_stream_cfg_reg;
+              end
               if (write_data[2]) stop_req_tgl   <= ~stop_req_tgl;
               if (write_data[3]) sreset_req_tgl <= ~sreset_req_tgl;
             end
@@ -590,34 +739,38 @@ module awg_timed_ctrl #(
             if (write_strb[3]) evt_wdata6_reg[31:24] <= write_data[31:24];
           end
           REG_EVT_WCTRL: begin
-            if (write_strb[0] && write_data[0]) begin
+            if (legacy_push_attempt) begin
               event_wr_addr_cfg <= evt_waddr_reg;
-              // Pack 256-bit event word:
-              //  [31:0]   = EVT_WDATA0 = timestamp[31:0]
-              //  [63:32]  = EVT_WDATA1 = timestamp[63:32]
-              //  [95:64]  = EVT_WDATA2 (event RAM) = {flags[15:0], channel[15:0]}
-              //             AXI write view: WDATA2[31:16]=channel, WDATA2[15:0]=flags
-              //             Event RAM view: [95:80]=flags, [79:64]=channel
-              //             Swap halves here to convert AXI write ordering into
-              //             event RAM ordering.
-              //  [127:96] = EVT_WDATA3 = payload[31:0]
-              //  [159:128]= EVT_WDATA4 = payload[63:32]
-              //  [191:160]= EVT_WDATA5 = payload[95:64]
-              //  [223:192]= EVT_WDATA6 = payload[127:96]
-              //  [255:224]= 0 (reserved)
-              event_wr_data_cfg <= {32'h0,
-                                    evt_wdata6_reg,
-                                    evt_wdata5_reg,
-                                    evt_wdata4_reg,
-                                    evt_wdata3_reg,
-                                    {evt_wdata2_reg[15:0], evt_wdata2_reg[31:16]},
-                                    evt_wdata1_reg,
-                                    evt_wdata0_reg};
+              event_wr_data_cfg <= stream_event_word;
               event_wr_req_tgl <= ~event_wr_req_tgl;
+            end else if (stream_push_attempt && !stream_push_fire) begin
+              write_overflow_sticky_reg <= 1'b1;
+            end else if (stream_push_fire) begin
+              stream_pushes_reg <= stream_pushes_reg + 1'b1;
             end
+          end
+          REG_STREAM_CTRL: begin
+            if (write_strb[0]) begin
+              mode_stream_cfg_reg <= write_data[STREAM_CTRL_MODE_STREAM];
+              if (write_data[STREAM_CTRL_WRITE_OVERFLOW])
+                write_overflow_sticky_reg <= 1'b0;
+            end
+          end
+          REG_LOW_WMARK: begin
+            if (write_strb[0]) low_wmark_reg[7:0]   <= write_data[7:0];
+            if (write_strb[1]) low_wmark_reg[15:8]  <= write_data[15:8];
+            if (write_strb[2]) low_wmark_reg[23:16] <= write_data[23:16];
+            if (write_strb[3]) low_wmark_reg[31:24] <= write_data[31:24];
           end
           default: ;
         endcase
+
+        if (write_addr == REG_CTRL && write_strb[0] && write_data[3]) begin
+          stream_flush_req_tgl <= ~stream_flush_req_tgl;
+          stream_fifo_s_reset_hold <= 2'b11;
+          write_overflow_sticky_reg <= 1'b0;
+          stream_pushes_reg <= 32'h0;
+        end
       end
 
       // -----------------------------------------------------------------------
@@ -658,6 +811,14 @@ module awg_timed_ctrl #(
           REG_EVT_WDATA4:   s_axi_rdata <= evt_wdata4_reg;
           REG_EVT_WDATA5:   s_axi_rdata <= evt_wdata5_reg;
           REG_EVT_WDATA6:   s_axi_rdata <= evt_wdata6_reg;
+          REG_STREAM_CTRL:  s_axi_rdata <= {29'h0, eof_seen_shadow,
+                                            write_overflow_sticky_reg, mode_stream_cfg_reg};
+          REG_OCCUPANCY:    s_axi_rdata <= stream_occupancy_axi;
+          REG_FREE_SPACE:   s_axi_rdata <= stream_free_space_axi;
+          REG_LOW_WMARK:    s_axi_rdata <= low_wmark_eff;
+          REG_STREAM_DEPTH: s_axi_rdata <= STREAM_DEPTH_USABLE;
+          REG_STREAM_PUSHES:s_axi_rdata <= stream_pushes_reg;
+          REG_STREAM_STALLS:s_axi_rdata <= stream_stalls_shadow;
           default:          s_axi_rdata <= 32'h0;
         endcase
       end
@@ -673,6 +834,8 @@ module awg_timed_ctrl #(
         status_shadow       <= status_sched_snap;
         last_exec_shadow    <= last_exec_sched_snap;
         cur_event_shadow    <= cur_event_snap;
+        eof_seen_shadow     <= eof_seen_sched_snap;
+        mode_stream_active_shadow <= mode_stream_sched_snap;
         // OR in new IRQ bits (accumulate; AXI clears via RW1C write)
         irq_status_axi      <= irq_status_axi | {28'h0, irq_snap};
       end
@@ -688,6 +851,11 @@ module awg_timed_ctrl #(
       reinit_reject_gray_sync1 <= reinit_reject_gray_sched;
       reinit_reject_gray_sync2 <= reinit_reject_gray_sync1;
       reinit_reject_shadow     <= gray2bin32(reinit_reject_gray_sync2);
+      stream_stalls_gray_sync1 <= stream_stalls_gray_sched;
+      stream_stalls_gray_sync2 <= stream_stalls_gray_sync1;
+      stream_stalls_shadow     <= gray2bin32(stream_stalls_gray_sync2);
+      stream_hold_valid_sync1  <= stream_hold_valid;
+      stream_hold_valid_shadow <= stream_hold_valid_sync1;
 
       // Event-write ack (only used for future event_count tracking)
       event_wr_ack_sync1   <= event_wr_ack_tgl;
@@ -737,6 +905,9 @@ module awg_timed_ctrl #(
       load_now_req_sync1 <= 1'b0;
       load_now_req_sync2 <= 1'b0;
       load_now_req_sync2_d <= 1'b0;
+      stream_flush_req_sync1 <= 1'b0;
+      stream_flush_req_sync2 <= 1'b0;
+      stream_flush_req_sync2_d <= 1'b0;
       event_wr_req_sync1   <= 1'b0;
       event_wr_req_sync2   <= 1'b0;
       event_wr_req_sync2_d <= 1'b0;
@@ -746,6 +917,8 @@ module awg_timed_ctrl #(
       time_reload_hi_s2 <= 32'h0;
       event_count_s1   <= 32'h0;
       event_count_s2   <= 32'h0;
+      mode_stream_cfg_s1 <= 1'b0;
+      mode_stream_cfg_s2 <= 1'b0;
       status_snap_tgl  <= 1'b0;
       event_wr_ack_tgl <= 1'b0;
       sched_time_counter  <= 64'h0;
@@ -759,12 +932,23 @@ module awg_timed_ctrl #(
       reinit_count_gray_sched <= 32'h0;
       reinit_reject_sched <= 32'h0;
       reinit_reject_gray_sched <= 32'h0;
+      stream_stalls_sched <= 32'h0;
+      stream_stalls_gray_sched <= 32'h0;
       prev_ts             <= 64'h0;
       prev_phase_reinit   <= 1'b0;
       error_code          <= ERR_NONE;
-      irq_sched           <= 4'h0;
+      irq_sched           <= 6'h0;
       compare_first       <= 1'b0;
       time_reload_arm_sched <= 1'b0;
+      mode_stream_sched   <= 1'b0;
+      stream_empty_waiting <= 1'b0;
+      stream_below_wmark_sched <= 1'b0;
+      eof_seen_sched      <= 1'b0;
+      stream_hold_valid   <= 1'b0;
+      stream_fifo_m_reset_hold <= 2'b11;
+      stream_fetch_data   <= 256'h0;
+      low_wmark_s1        <= 32'h0;
+      low_wmark_s2        <= 32'h0;
       marker_commit       <= 1'b0;
       marker_start        <= 1'b0;
       marker_done         <= 1'b0;
@@ -776,15 +960,23 @@ module awg_timed_ctrl #(
       status_sched_snap   <= 32'h0;
       last_exec_sched_snap <= 64'h0;
       cur_event_snap      <= 32'h0;
-      irq_snap            <= 4'h0;
+      irq_snap            <= 6'h0;
+      eof_seen_sched_snap <= 1'b0;
+      mode_stream_sched_snap <= 1'b0;
     end else begin
       sched_time_counter <= sched_time_counter + 1'b1;
+      if (stream_fifo_m_reset_hold != 2'b00)
+        stream_fifo_m_reset_hold <= {stream_fifo_m_reset_hold[0], 1'b0};
 
       // Clear one-cycle pulse outputs
       marker_commit <= 1'b0;
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
       sched_phase_reinit <= 1'b0;
+      if (!stream_hold_valid && stream_prefetch_en && stream_fifo_m_valid) begin
+        stream_fetch_data <= stream_fifo_m_data;
+        stream_hold_valid <= 1'b1;
+      end
 
       // -------------------------------------------------------------------
       // CDC sync chains: AXI -> sched
@@ -810,6 +1002,9 @@ module awg_timed_ctrl #(
       load_now_req_sync1   <= load_now_req_tgl;
       load_now_req_sync2   <= load_now_req_sync1;
       load_now_req_sync2_d <= load_now_req_sync2;
+      stream_flush_req_sync1 <= stream_flush_req_tgl;
+      stream_flush_req_sync2 <= stream_flush_req_sync1;
+      stream_flush_req_sync2_d <= stream_flush_req_sync2;
 
       event_wr_req_sync1   <= event_wr_req_tgl;
       event_wr_req_sync2   <= event_wr_req_sync1;
@@ -823,6 +1018,17 @@ module awg_timed_ctrl #(
       // event_count_cfg 2-FF direct sync (stable well before ARM fires)
       event_count_s1 <= event_count_cfg;
       event_count_s2 <= event_count_s1;
+      mode_stream_cfg_s1 <= mode_stream_cfg_reg;
+      mode_stream_cfg_s2 <= mode_stream_cfg_s1;
+      low_wmark_s1 <= low_wmark_reg;
+      low_wmark_s2 <= low_wmark_s1;
+      if (stream_buffered_sched > low_wmark_eff_sched)
+        stream_below_wmark_sched <= 1'b0;
+
+      if (stream_flush_req_sync2 ^ stream_flush_req_sync2_d) begin
+        stream_fifo_m_reset_hold <= 2'b11;
+        stream_fetch_data <= 256'h0;
+      end
 
       if (load_now_req_sync2 ^ load_now_req_sync2_d) begin
         sched_time_counter <= {time_reload_hi_s2, time_reload_lo_s2};
@@ -848,26 +1054,40 @@ module awg_timed_ctrl #(
         reinit_count_gray_sched <= 32'h0;
         reinit_reject_sched <= 32'h0;
         reinit_reject_gray_sched <= 32'h0;
-        irq_sched          <= 4'h0;
+        stream_stalls_sched <= 32'h0;
+        stream_stalls_gray_sched <= 32'h0;
+        irq_sched          <= 6'h0;
         error_code         <= ERR_NONE;
         prev_ts            <= 64'h0;
         prev_phase_reinit  <= 1'b0;
         time_reload_arm_sched <= 1'b0;
+        stream_empty_waiting <= 1'b0;
+        stream_below_wmark_sched <= 1'b0;
+        eof_seen_sched     <= 1'b0;
+        stream_hold_valid  <= 1'b0;
         sched_apply_s      <= {NUM_CHANNELS{1'b0}};
+        stream_fifo_m_reset_hold <= 2'b11;
+        stream_fetch_data  <= 256'h0;
         // Send cleared status snapshot to AXI domain
         status_sched_snap   <= 32'h0;
         cur_event_snap      <= 32'h0;
-        irq_snap            <= 4'h0;
+        irq_snap            <= 6'h0;
         last_exec_sched_snap <= last_exec_sched;
+        eof_seen_sched_snap <= 1'b0;
+        mode_stream_sched_snap <= mode_stream_sched;
         status_snap_tgl     <= ~status_snap_tgl;
 
       end else if (stop_req_sync2 ^ stop_req_sync2_d) begin
         // Stop: abort execution, return to IDLE (does not clear counters)
         engine_state        <= ENGINE_IDLE;
+        stream_empty_waiting <= 1'b0;
+        stream_below_wmark_sched <= 1'b0;
         status_sched_snap   <= 32'h0;
         cur_event_snap      <= read_ptr;
         irq_snap            <= irq_sched;
         last_exec_sched_snap <= last_exec_sched;
+        eof_seen_sched_snap <= eof_seen_sched;
+        mode_stream_sched_snap <= mode_stream_sched;
         sched_apply_s       <= {NUM_CHANNELS{1'b0}};
         status_snap_tgl     <= ~status_snap_tgl;
 
@@ -880,11 +1100,14 @@ module awg_timed_ctrl #(
         if (arm_edge && run_edge) begin
           if (engine_state == ENGINE_IDLE) begin
             event_count_sched <= event_count_s2;
+            mode_stream_sched <= mode_stream_cfg_s2;
             sched_apply_s     <= {NUM_CHANNELS{1'b0}};
-            if (event_count_s2 > 0) begin
+            if (mode_stream_cfg_s2 || (event_count_s2 > 0)) begin
               read_ptr       <= 32'h0;
               prev_ts        <= 64'h0;
               prev_phase_reinit <= 1'b0;
+              stream_empty_waiting <= 1'b0;
+              stream_below_wmark_sched <= 1'b0;
               engine_state   <= ENGINE_WAIT_FETCH;
               marker_start   <= 1'b1;
               // Snapshot: running=1
@@ -892,6 +1115,8 @@ module awg_timed_ctrl #(
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
+              eof_seen_sched_snap <= eof_seen_sched;
+              mode_stream_sched_snap <= mode_stream_cfg_s2;
               status_snap_tgl     <= ~status_snap_tgl;
             end else begin
               engine_state      <= ENGINE_ARMED;
@@ -900,6 +1125,8 @@ module awg_timed_ctrl #(
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
+              eof_seen_sched_snap <= eof_seen_sched;
+              mode_stream_sched_snap <= mode_stream_cfg_s2;
               status_snap_tgl     <= ~status_snap_tgl;
             end
           end
@@ -907,6 +1134,7 @@ module awg_timed_ctrl #(
           if (arm_edge) begin
             if (engine_state == ENGINE_IDLE) begin
               event_count_sched <= event_count_s2;
+              mode_stream_sched <= mode_stream_cfg_s2;
               sched_apply_s     <= {NUM_CHANNELS{1'b0}};
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
@@ -914,6 +1142,8 @@ module awg_timed_ctrl #(
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
+              eof_seen_sched_snap <= eof_seen_sched;
+              mode_stream_sched_snap <= mode_stream_cfg_s2;
               status_snap_tgl     <= ~status_snap_tgl;
             end
           end
@@ -922,10 +1152,13 @@ module awg_timed_ctrl #(
           // RUN edge: ARMED -> WAIT_FETCH (starts execution)
           // -------------------------------------------------------------------
           if (run_edge) begin
-            if (engine_state == ENGINE_ARMED && event_count_sched > 0) begin
+            if (engine_state == ENGINE_ARMED &&
+                (mode_stream_sched || (event_count_sched > 0))) begin
               read_ptr       <= 32'h0;
               prev_ts        <= 64'h0;
               prev_phase_reinit <= 1'b0;
+              stream_empty_waiting <= 1'b0;
+              stream_below_wmark_sched <= 1'b0;
               engine_state   <= ENGINE_WAIT_FETCH;
               marker_start   <= 1'b1;
               // Snapshot: running=1
@@ -933,6 +1166,8 @@ module awg_timed_ctrl #(
               cur_event_snap      <= 32'h0;
               irq_snap            <= irq_sched;
               last_exec_sched_snap <= last_exec_sched;
+              eof_seen_sched_snap <= eof_seen_sched;
+              mode_stream_sched_snap <= mode_stream_sched;
               status_snap_tgl     <= ~status_snap_tgl;
             end
           end
@@ -947,9 +1182,31 @@ module awg_timed_ctrl #(
           ENGINE_ARMED: ;   // waiting for RUN
 
           ENGINE_WAIT_FETCH: begin
-            // Present read_ptr to BRAM; fetch_data valid next cycle (COMPARE).
-            compare_first <= 1'b1;
-            engine_state  <= ENGINE_COMPARE;
+            if (mode_stream_sched) begin
+              if (stream_hold_valid) begin
+                compare_first <= 1'b1;
+                stream_empty_waiting <= 1'b0;
+                engine_state  <= ENGINE_COMPARE;
+              end else begin
+                stream_stalls_sched <= stream_stalls_sched + 1'b1;
+                stream_stalls_gray_sched <= (stream_stalls_sched + 1'b1) ^ ((stream_stalls_sched + 1'b1) >> 1);
+                if (!stream_empty_waiting) begin
+                  stream_empty_waiting <= 1'b1;
+                  irq_sched[IRQ_EMPTY_STALL] <= 1'b1;
+                  status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
+                  cur_event_snap      <= read_ptr;
+                  irq_snap            <= irq_sched | (6'b1 << IRQ_EMPTY_STALL);
+                  last_exec_sched_snap <= last_exec_sched;
+                  eof_seen_sched_snap <= eof_seen_sched;
+                  mode_stream_sched_snap <= mode_stream_sched;
+                  status_snap_tgl     <= ~status_snap_tgl;
+                end
+              end
+            end else begin
+              // Present read_ptr to BRAM; fetch_data valid next cycle (COMPARE).
+              compare_first <= 1'b1;
+              engine_state  <= ENGINE_COMPARE;
+            end
           end
 
           ENGINE_COMPARE: begin
@@ -970,9 +1227,10 @@ module awg_timed_ctrl #(
               status_sched_snap   <= {16'h0, ERR_MISSED_DEADLINE, 12'h0,
                                       1'b1, 1'b0, 1'b0, 1'b0};
               cur_event_snap      <= read_ptr;
-              // IRQ_UNDERRUN=bit3, IRQ_ERROR=bit1  -> 4'b1010
-              irq_snap            <= irq_sched | 4'b1010;
+              irq_snap            <= irq_sched | ((6'b1 << IRQ_UNDERRUN) | (6'b1 << IRQ_ERROR));
               last_exec_sched_snap <= last_exec_sched;
+              eof_seen_sched_snap <= eof_seen_sched;
+              mode_stream_sched_snap <= mode_stream_sched;
               status_snap_tgl     <= ~status_snap_tgl;
 
             end else if (ev_ts <= sched_time_counter) begin
@@ -992,8 +1250,10 @@ module awg_timed_ctrl #(
                                         12'h0,
                                         1'b1, 1'b0, 1'b0, 1'b0};
                 cur_event_snap      <= read_ptr;
-                irq_snap            <= irq_sched | 4'b0110;
+                irq_snap            <= irq_sched | ((6'b1 << IRQ_SPACING_VIOLATION) | (6'b1 << IRQ_ERROR));
                 last_exec_sched_snap <= last_exec_sched;
+                eof_seen_sched_snap <= eof_seen_sched;
+                mode_stream_sched_snap <= mode_stream_sched;
                 status_snap_tgl     <= ~status_snap_tgl;
               end else begin
                 engine_state <= ENGINE_FIRE;
@@ -1027,34 +1287,83 @@ module awg_timed_ctrl #(
             cur_event_snap       <= cur_event_next;
             irq_snap             <= irq_sched;
             last_exec_sched_snap <= ev_ts;
+            eof_seen_sched_snap  <= eof_seen_sched;
+            mode_stream_sched_snap <= mode_stream_sched;
             status_snap_tgl      <= ~status_snap_tgl;
             engine_state       <= ENGINE_ADVANCE;
           end
 
           ENGINE_ADVANCE: begin
-            if (read_ptr >= event_count_sched - 1) begin
-              // All events have been fired
-              irq_sched[IRQ_DONE] <= 1'b1;
-              engine_state        <= ENGINE_DONE;
-              marker_done         <= 1'b1;
-              // Final snapshot: done=1.
-              // commit_count_sched already carries the post-FIRE increment;
-              // last_exec_sched was updated to ev_ts in ENGINE_FIRE.
-              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
-                                      1'b0, 1'b1, 1'b0, 1'b0};
-              cur_event_snap      <= cur_event_next;
-              irq_snap            <= irq_sched | 4'b0001;
-              last_exec_sched_snap <= last_exec_sched;
-              status_snap_tgl     <= ~status_snap_tgl;
+            if (mode_stream_sched) begin
+              stream_hold_valid <= 1'b0;
+              if (stream_fifo_m_level <= low_wmark_eff_sched)
+                stream_below_wmark_sched <= 1'b1;
+              else
+                stream_below_wmark_sched <= 1'b0;
+              if (!stream_below_wmark_sched && (stream_fifo_m_level <= low_wmark_eff_sched))
+                irq_sched[IRQ_LOW_WATERMARK] <= 1'b1;
+              if (ev_flags[1]) begin
+                irq_sched[IRQ_DONE] <= 1'b1;
+                eof_seen_sched <= 1'b1;
+                engine_state        <= ENGINE_DONE;
+                marker_done         <= 1'b1;
+                status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
+                                        1'b0, 1'b1, 1'b0, 1'b0};
+                cur_event_snap      <= cur_event_next;
+                irq_snap            <= irq_sched | (6'b1 << IRQ_DONE);
+                last_exec_sched_snap <= last_exec_sched;
+                eof_seen_sched_snap <= 1'b1;
+                mode_stream_sched_snap <= mode_stream_sched;
+                status_snap_tgl     <= ~status_snap_tgl;
+              end else begin
+                read_ptr     <= read_ptr + 1'b1;
+                engine_state <= ENGINE_WAIT_FETCH;
+              end
             end else begin
-              read_ptr     <= read_ptr + 1'b1;
-              engine_state <= ENGINE_WAIT_FETCH;
+              if (read_ptr >= event_count_sched - 1) begin
+                // All events have been fired
+                irq_sched[IRQ_DONE] <= 1'b1;
+                engine_state        <= ENGINE_DONE;
+                marker_done         <= 1'b1;
+                // Final snapshot: done=1.
+                // commit_count_sched already carries the post-FIRE increment;
+                // last_exec_sched was updated to ev_ts in ENGINE_FIRE.
+                status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
+                                        1'b0, 1'b1, 1'b0, 1'b0};
+                cur_event_snap      <= cur_event_next;
+                irq_snap            <= irq_sched | (6'b1 << IRQ_DONE);
+                last_exec_sched_snap <= last_exec_sched;
+                eof_seen_sched_snap <= eof_seen_sched;
+                mode_stream_sched_snap <= mode_stream_sched;
+                status_snap_tgl     <= ~status_snap_tgl;
+              end else begin
+                read_ptr     <= read_ptr + 1'b1;
+                engine_state <= ENGINE_WAIT_FETCH;
+              end
             end
           end
 
-          ENGINE_DONE:  ;   // terminal; firmware must stop/reset to reuse
+          ENGINE_DONE: begin
+            status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
+                                    1'b0, 1'b1, 1'b0, 1'b0};
+            cur_event_snap      <= cur_event_next;
+            irq_snap            <= 6'h0;
+            last_exec_sched_snap <= last_exec_sched;
+            eof_seen_sched_snap <= eof_seen_sched;
+            mode_stream_sched_snap <= mode_stream_sched;
+            status_snap_tgl     <= ~status_snap_tgl;
+          end
 
-          ENGINE_ERROR: ;   // terminal; firmware must stop/reset to recover
+          ENGINE_ERROR: begin
+            status_sched_snap   <= {16'h0, error_code, 12'h0,
+                                    1'b1, 1'b0, 1'b0, 1'b0};
+            cur_event_snap      <= read_ptr;
+            irq_snap            <= 6'h0;
+            last_exec_sched_snap <= last_exec_sched;
+            eof_seen_sched_snap <= eof_seen_sched;
+            mode_stream_sched_snap <= mode_stream_sched;
+            status_snap_tgl     <= ~status_snap_tgl;
+          end
 
           default: engine_state <= ENGINE_IDLE;
         endcase

@@ -62,10 +62,7 @@ set_property -dict {PACKAGE_PIN B7} [get_ports {tx_data_p[0]}]
 ####################################################################################
 
 
-set tx_refclk_mhz 122.88
-if {[info exists ::env(AWG_TX_REFCLK_MHZ)]} {
-  set tx_refclk_mhz $::env(AWG_TX_REFCLK_MHZ)
-}
+set tx_refclk_mhz $::env(AWG_TX_REFCLK_MHZ)
 set tx_refclk_period [expr {1000.0 / $tx_refclk_mhz}]
 set tx_refclk_half_period [expr {$tx_refclk_period / 2.0}]
 create_clock -period $tx_refclk_period -name tx_ref_clk \
@@ -103,3 +100,65 @@ set_property ASYNC_REG TRUE \
 
 set_false_path \
   -to [get_cells -hier -filter {NAME =~ *jesd_sysref_sync*sync_ff1_reg[*]}]
+
+# ---------------------------------------------------------------------------
+# AWG timed-control CDC constraints
+# ---------------------------------------------------------------------------
+# s_axi_aclk is the 100 MHz CPU/AXI clock (mmcm_clkout1). sched_clk is the
+# JESD TX clock from util_awg_xcvr/tx_out_clk_0 (tx_div_clk). These clock
+# domains are intentionally asynchronous. Constrain only the known CDC
+# capture points and handshake snapshot buses; same-clock scheduler and AXI
+# timing remains fully checked.
+set_property ASYNC_REG TRUE \
+  [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/*_sync1_reg*}] \
+  [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/*_sync2_reg*}] \
+  [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/*_s1_reg*}] \
+  [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/*_s2_reg*}] \
+  [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/i_stream_fifo/*cdc_sync_stage1_reg*}] \
+  [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/i_stream_fifo/*cdc_sync_stage2_reg*}]
+
+# Single-bit toggles and stable scalar/vector values captured by first-stage
+# synchronizers.
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/*_sync1_reg*}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/time_now_*_s1_reg[*]}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/time_reload_*_s1_reg[*]}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/event_count_s1_reg[*]}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/mode_stream_cfg_s1_reg}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/low_wmark_s1_reg[*]}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/*_gray_sync1_reg[*]}]
+set_false_path \
+  -to [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/i_stream_fifo/*cdc_sync_stage1_reg*}]
+
+# Event write payload/address is held in the AXI domain and committed when the
+# synchronized event-write toggle is observed in sched_clk.
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/event_wr_addr_cfg_reg[*]}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/event_mem_reg*}]
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/event_wr_data_cfg_reg[*]}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/event_mem_reg*}]
+
+# Snapshot buses are updated in sched_clk, then sampled by the AXI domain only
+# after status_snap_tgl has crossed its 2-FF synchronizer.
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/status_sched_snap_reg[*]}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/status_shadow_reg[*]}]
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/last_exec_sched_snap_reg[*]}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/last_exec_shadow_reg[*]}]
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/cur_event_snap_reg[*]}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/cur_event_shadow_reg[*]}]
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/irq_snap_reg[*]}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/irq_status_axi_reg[*]}]
+set_false_path \
+  -from [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/eof_seen_sched_snap_reg}] \
+  -to   [get_cells -quiet -hier -filter {NAME =~ *awg_timed_ctrl_0/inst/eof_seen_shadow_reg}]
