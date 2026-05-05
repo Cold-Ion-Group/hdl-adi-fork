@@ -86,7 +86,13 @@ temporary_case_dependencies.mk
 *.str
 *.vcd
 *.wlf
+*.wdb
 transcript
+xsim.dir/
+xelab.pb
+xvlog.pb
+xsim*.jou
+xsim*.log
 tags
 boot_bin
 _info
@@ -103,6 +109,9 @@ library/**/bd/bd.tcl
 *.syn.summary
 qdb
 tmp-clearbox
+tmpclaude-*-cwd
+tmp_*_test.tcl
+tmp_*_test/
 *.bin
 .qsys_edit
 
