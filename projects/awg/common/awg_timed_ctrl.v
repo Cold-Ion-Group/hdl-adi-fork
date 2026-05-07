@@ -201,7 +201,7 @@ module awg_timed_ctrl #(
   localparam integer STREAM_CTRL_MODE_STREAM         = 0;
   localparam integer STREAM_CTRL_WRITE_OVERFLOW      = 1;
   localparam integer STREAM_CTRL_EOF_SEEN            = 2;
-  localparam [31:0] STREAM_DEPTH_USABLE              = (1 << STREAM_ADDR_WIDTH);
+  localparam [31:0] STREAM_DEPTH_USABLE              = ((32'h1 << STREAM_ADDR_WIDTH) - 1);
 
   // Engine states
   localparam [2:0] ENGINE_IDLE       = 3'd0;
@@ -417,9 +417,7 @@ module awg_timed_ctrl #(
   wire [255:0] stream_fifo_m_data;
 
   wire [31:0] stream_fifo_free_space_axi = {{(32-STREAM_ADDR_WIDTH){1'b0}}, stream_fifo_s_room};
-  wire [31:0] stream_occupancy_axi =
-    (stream_pushes_reg >= commit_count_shadow) ? (stream_pushes_reg - commit_count_shadow) : 32'h0;
-  wire [31:0] stream_free_space_axi = STREAM_DEPTH_USABLE - stream_occupancy_axi;
+  wire [31:0] stream_occupancy_axi = STREAM_DEPTH_USABLE - stream_fifo_free_space_axi;
   wire [31:0] low_wmark_eff = (low_wmark_reg > STREAM_DEPTH_USABLE) ? STREAM_DEPTH_USABLE : low_wmark_reg;
   wire [31:0] low_wmark_eff_sched = (low_wmark_s2 > STREAM_DEPTH_USABLE) ? STREAM_DEPTH_USABLE : low_wmark_s2;
   wire [31:0] stream_buffered_sched = {{(32-STREAM_ADDR_WIDTH){1'b0}}, stream_fifo_m_level} +
@@ -814,7 +812,7 @@ module awg_timed_ctrl #(
           REG_STREAM_CTRL:  s_axi_rdata <= {29'h0, eof_seen_shadow,
                                             write_overflow_sticky_reg, mode_stream_cfg_reg};
           REG_OCCUPANCY:    s_axi_rdata <= stream_occupancy_axi;
-          REG_FREE_SPACE:   s_axi_rdata <= stream_free_space_axi;
+          REG_FREE_SPACE:   s_axi_rdata <= stream_fifo_free_space_axi;
           REG_LOW_WMARK:    s_axi_rdata <= low_wmark_eff;
           REG_STREAM_DEPTH: s_axi_rdata <= STREAM_DEPTH_USABLE;
           REG_STREAM_PUSHES:s_axi_rdata <= stream_pushes_reg;
