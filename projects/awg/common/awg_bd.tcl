@@ -106,6 +106,21 @@ ad_ip_instance axi_dmac axi_ad9144_dma [list \
   DMA_DATA_WIDTH_DEST $DAC_DATA_WIDTH \
 ]
 
+ad_ip_instance axi_dmac axi_sched_dma [list \
+  DMA_TYPE_SRC 0 \
+  DMA_TYPE_DEST 1 \
+  AXI_SLICE_SRC 1 \
+  AXI_SLICE_DEST 1 \
+  DMA_LENGTH_WIDTH 24 \
+  DMA_2D_TRANSFER 0 \
+  CYCLIC 0 \
+  ID 2 \
+  DMA_DATA_WIDTH_SRC 256 \
+  DMA_DATA_WIDTH_DEST 256 \
+  MAX_BYTES_PER_BURST 128 \
+  DMA_AXI_PROTOCOL_SRC 1 \
+]
+
 
 
 
@@ -247,6 +262,12 @@ ad_connect axi_dac_fifo/dma_data axi_ad9144_dma/m_axis_data
 ad_connect axi_dac_fifo/dma_valid axi_ad9144_dma/m_axis_valid
 ad_connect axi_dac_fifo/dma_xfer_last axi_ad9144_dma/m_axis_last
 
+ad_connect sys_cpu_clk axi_sched_dma/m_axis_aclk
+ad_connect sys_cpu_resetn axi_sched_dma/m_src_axi_aresetn
+ad_connect axi_sched_dma/m_axis_data awg_timed_ctrl_0/dma_s_axis_tdata
+ad_connect axi_sched_dma/m_axis_valid awg_timed_ctrl_0/dma_s_axis_tvalid
+ad_connect axi_sched_dma/m_axis_ready awg_timed_ctrl_0/dma_s_axis_tready
+
 
 
 
@@ -257,6 +278,7 @@ ad_cpu_interconnect 0x44A60000 axi_ad9144_xcvr
 ad_cpu_interconnect 0x44A04000 axi_ad9144_tpl
 ad_cpu_interconnect 0x44A90000 axi_ad9144_jesd
 ad_cpu_interconnect 0x44AA0000 awg_timed_ctrl_0
+ad_cpu_interconnect 0x44AB0000 axi_sched_dma
 ad_cpu_interconnect 0x7c420000 axi_ad9144_dma
 
 
@@ -264,6 +286,8 @@ ad_cpu_interconnect 0x7c420000 axi_ad9144_dma
 
 ad_mem_hp1_interconnect $sys_cpu_clk sys_ps7/S_AXI_HP1
 ad_mem_hp1_interconnect $sys_cpu_clk axi_ad9144_dma/m_src_axi
+ad_mem_hp2_interconnect $sys_cpu_clk sys_ps7/S_AXI_HP2
+ad_mem_hp2_interconnect $sys_cpu_clk axi_sched_dma/m_src_axi
 
 
 # interrupts
@@ -271,6 +295,7 @@ ad_mem_hp1_interconnect $sys_cpu_clk axi_ad9144_dma/m_src_axi
 ad_cpu_interrupt ps-10 mb-15 axi_ad9144_jesd/irq
 
 ad_cpu_interrupt ps-12 mb-13 axi_ad9144_dma/irq
+ad_cpu_interrupt ps-13 mb-12 axi_sched_dma/irq
 
 
 
