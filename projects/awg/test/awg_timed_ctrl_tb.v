@@ -47,6 +47,9 @@ module awg_timed_ctrl_tb;
   reg         sched_clk = 1'b0;
   reg         sched_reset = 1'b1;
   reg         sysref_pulse = 1'b0;
+  reg [255:0] dma_s_axis_tdata = 256'h0;
+  reg         dma_s_axis_tvalid = 1'b0;
+  wire        dma_s_axis_tready;
   wire        marker_commit;
   wire        marker_start;
   wire        marker_done;
@@ -114,6 +117,9 @@ module awg_timed_ctrl_tb;
     .s_axi_rresp(s_axi_rresp),
     .s_axi_rvalid(s_axi_rvalid),
     .s_axi_rready(s_axi_rready),
+    .dma_s_axis_tdata(dma_s_axis_tdata),
+    .dma_s_axis_tvalid(dma_s_axis_tvalid),
+    .dma_s_axis_tready(dma_s_axis_tready),
     .sched_clk(sched_clk),
     .sched_reset(sched_reset),
     .sysref_pulse(sysref_pulse),

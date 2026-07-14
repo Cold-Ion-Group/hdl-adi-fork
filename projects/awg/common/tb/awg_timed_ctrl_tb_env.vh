@@ -61,6 +61,9 @@
   reg         sched_clk = 1'b0;
   reg         sched_reset = 1'b1;
   reg         sysref_pulse = 1'b0;
+  reg [255:0] dma_s_axis_tdata = 256'h0;
+  reg         dma_s_axis_tvalid = 1'b0;
+  wire        dma_s_axis_tready;
   wire        marker_commit;
   wire        marker_start;
   wire        marker_done;
@@ -100,6 +103,9 @@
     .s_axi_rresp(s_axi_rresp),
     .s_axi_rvalid(s_axi_rvalid),
     .s_axi_rready(s_axi_rready),
+    .dma_s_axis_tdata(dma_s_axis_tdata),
+    .dma_s_axis_tvalid(dma_s_axis_tvalid),
+    .dma_s_axis_tready(dma_s_axis_tready),
     .sched_clk(sched_clk),
     .sched_reset(sched_reset),
     .sysref_pulse(sysref_pulse),
@@ -195,6 +201,8 @@
       s_axi_bready = 1'b0;
       s_axi_arvalid = 1'b0;
       s_axi_rready = 1'b0;
+      dma_s_axis_tdata = 256'h0;
+      dma_s_axis_tvalid = 1'b0;
       repeat (6) @(posedge s_axi_aclk);
       s_axi_aresetn = 1'b1;
       repeat (4) @(posedge sched_clk);
@@ -427,6 +435,34 @@
       axi_write(REG_EVT_WDATA5, w5, 4'hf);
       axi_write(REG_EVT_WDATA6, w6, 4'hf);
       axi_write(REG_EVT_WCTRL, 32'h1, 4'b0001);
+    end
+  endtask
+
+  task automatic dma_push_word;
+    input [255:0] word;
+    integer timeout;
+    integer done;
+    begin
+      @(negedge s_axi_aclk);
+      dma_s_axis_tdata = word;
+      dma_s_axis_tvalid = 1'b1;
+      timeout = 0;
+      done = 0;
+      while (!done) begin
+        @(posedge s_axi_aclk);
+        if (dma_s_axis_tready)
+          done = 1;
+        else begin
+          timeout = timeout + 1;
+          if (timeout > 128) begin
+            test_fail("DMA stream handshake timeout");
+            done = 1;
+          end
+        end
+      end
+      @(negedge s_axi_aclk);
+      dma_s_axis_tvalid = 1'b0;
+      dma_s_axis_tdata = 256'h0;
     end
   endtask
 

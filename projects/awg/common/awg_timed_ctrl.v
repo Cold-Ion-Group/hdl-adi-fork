@@ -33,7 +33,8 @@
 //   0x6C  TIME_RELOAD_LO   RW  pending scheduler epoch reload value [31:0]
 //   0x70  TIME_RELOAD_HI   RW  pending scheduler epoch reload value [63:32]
 //   0x74  TIME_RELOAD_CTRL RW  [0]=load on next SYSREF, [1]=load now (pulse)
-//   0x78  STREAM_CTRL    RW  [0]=mode_stream, [1]=write_overflow_sticky (W1C), [2]=eof_seen (RO)
+//   0x78  STREAM_CTRL    RW  [0]=mode_stream, [1]=write_overflow_sticky (W1C),
+//                           [2]=eof_seen (RO), [3]=dma_mode
 //   0x7C  OCCUPANCY      RO  stream FIFO occupancy in events
 //   0x80  FREE_SPACE     RO  stream FIFO free space in events
 //   0x84  LOW_WMARK      RW  stream FIFO low-watermark threshold in events
@@ -74,7 +75,7 @@ module awg_timed_ctrl #(
 ) (
   // AXI4-Lite slave
   (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 s_axi_aclk CLK" *)
-  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axi, ASSOCIATED_RESET s_axi_aresetn" *)
+  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axi:dma_s_axis, ASSOCIATED_RESET s_axi_aresetn" *)
   input  wire        s_axi_aclk,
   (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 s_axi_aresetn RST" *)
   (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
@@ -117,6 +118,13 @@ module awg_timed_ctrl #(
   output reg         s_axi_rvalid,
   (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi RREADY" *)
   input  wire        s_axi_rready,
+  // DMA-backed stream ingress (s_axi_aclk domain)
+  (* X_INTERFACE_INFO = "xilinx.com:interface:axis:1.0 dma_s_axis TDATA" *)
+  input  wire [255:0] dma_s_axis_tdata,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:axis:1.0 dma_s_axis TVALID" *)
+  input  wire         dma_s_axis_tvalid,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:axis:1.0 dma_s_axis TREADY" *)
+  output wire         dma_s_axis_tready,
   // Scheduler clock domain
   (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 sched_clk CLK" *)
   (* X_INTERFACE_PARAMETER = "ASSOCIATED_RESET sched_reset" *)
@@ -201,6 +209,7 @@ module awg_timed_ctrl #(
   localparam integer STREAM_CTRL_MODE_STREAM         = 0;
   localparam integer STREAM_CTRL_WRITE_OVERFLOW      = 1;
   localparam integer STREAM_CTRL_EOF_SEEN            = 2;
+  localparam integer STREAM_CTRL_DMA_MODE            = 3;
   localparam [31:0] STREAM_DEPTH_USABLE              = ((32'h1 << STREAM_ADDR_WIDTH) - 1);
 
   // Engine states
@@ -243,6 +252,8 @@ module awg_timed_ctrl #(
   reg [31:0] time_reload_ctrl_reg;
   reg        mode_stream_cfg_reg;
   reg        mode_stream_locked_reg;
+  reg        dma_mode_cfg_reg;
+  reg        dma_mode_locked_reg;
   reg        write_overflow_sticky_reg;
   reg [31:0] low_wmark_reg;
   reg [31:0] stream_pushes_reg;
@@ -444,11 +455,21 @@ module awg_timed_ctrl #(
   wire read_fire  = s_axi_arvalid && s_axi_arready;
   wire        stream_mode_write_sel =
     (status_shadow[0] || status_shadow[1]) ? mode_stream_locked_reg : mode_stream_cfg_reg;
+  wire        dma_mode_write_sel =
+    (status_shadow[0] || status_shadow[1]) ? dma_mode_locked_reg : dma_mode_cfg_reg;
+  wire        dma_stream_write_sel = stream_mode_write_sel && dma_mode_write_sel;
   wire        stream_push_attempt =
-    write_issue && (write_addr == REG_EVT_WCTRL) && write_strb[0] && write_data[0] && stream_mode_write_sel;
+    write_issue && (write_addr == REG_EVT_WCTRL) && write_strb[0] && write_data[0] &&
+    stream_mode_write_sel && !dma_stream_write_sel;
   wire        legacy_push_attempt =
     write_issue && (write_addr == REG_EVT_WCTRL) && write_strb[0] && write_data[0] && !stream_mode_write_sel;
-  wire        stream_push_fire = stream_push_attempt && stream_fifo_s_ready;
+  wire        stream_fifo_s_accept = stream_fifo_s_aresetn && stream_fifo_s_ready;
+  wire [255:0] stream_fifo_s_data = dma_stream_write_sel ? dma_s_axis_tdata : stream_event_word;
+  wire        stream_fifo_s_valid = dma_stream_write_sel ? dma_s_axis_tvalid : stream_push_attempt;
+  wire        dma_push_fire = dma_stream_write_sel && dma_s_axis_tvalid && stream_fifo_s_accept;
+  wire        stream_push_fire = stream_push_attempt && stream_fifo_s_accept;
+
+  assign dma_s_axis_tready = dma_stream_write_sel && stream_fifo_s_accept;
 
   wire [255:0] active_fetch_data = mode_stream_sched ? stream_fetch_data : fetch_data;
 
@@ -505,8 +526,8 @@ module awg_timed_ctrl #(
     .s_axis_aclk(s_axi_aclk),
     .s_axis_aresetn(stream_fifo_s_aresetn),
     .s_axis_ready(stream_fifo_s_ready),
-    .s_axis_valid(stream_push_attempt),
-    .s_axis_data(stream_event_word),
+    .s_axis_valid(stream_fifo_s_valid),
+    .s_axis_data(stream_fifo_s_data),
     .s_axis_tkeep({32{1'b1}}),
     .s_axis_tlast(1'b0),
     .s_axis_room(stream_fifo_s_room),
@@ -540,6 +561,8 @@ module awg_timed_ctrl #(
       time_reload_ctrl_reg <= 32'h0;
       mode_stream_cfg_reg <= 1'b0;
       mode_stream_locked_reg <= 1'b0;
+      dma_mode_cfg_reg <= 1'b0;
+      dma_mode_locked_reg <= 1'b0;
       write_overflow_sticky_reg <= 1'b0;
       low_wmark_reg      <= (STREAM_DEPTH_USABLE >> 2);
       stream_pushes_reg  <= 32'h0;
@@ -599,6 +622,8 @@ module awg_timed_ctrl #(
     end else begin
       if (stream_fifo_s_reset_hold != 2'b00)
         stream_fifo_s_reset_hold <= {stream_fifo_s_reset_hold[0], 1'b0};
+      if (dma_push_fire)
+        stream_pushes_reg <= stream_pushes_reg + 1'b1;
 
       // AXI B-channel drain
       if (s_axi_bvalid && s_axi_bready) begin
@@ -642,6 +667,7 @@ module awg_timed_ctrl #(
               if (write_data[1]) begin
                 arm_req_tgl <= ~arm_req_tgl;
                 mode_stream_locked_reg <= mode_stream_cfg_reg;
+                dma_mode_locked_reg <= dma_mode_cfg_reg;
               end
               if (write_data[2]) stop_req_tgl   <= ~stop_req_tgl;
               if (write_data[3]) sreset_req_tgl <= ~sreset_req_tgl;
@@ -750,6 +776,7 @@ module awg_timed_ctrl #(
           REG_STREAM_CTRL: begin
             if (write_strb[0]) begin
               mode_stream_cfg_reg <= write_data[STREAM_CTRL_MODE_STREAM];
+              dma_mode_cfg_reg <= write_data[STREAM_CTRL_DMA_MODE];
               if (write_data[STREAM_CTRL_WRITE_OVERFLOW])
                 write_overflow_sticky_reg <= 1'b0;
             end
@@ -809,7 +836,7 @@ module awg_timed_ctrl #(
           REG_EVT_WDATA4:   s_axi_rdata <= evt_wdata4_reg;
           REG_EVT_WDATA5:   s_axi_rdata <= evt_wdata5_reg;
           REG_EVT_WDATA6:   s_axi_rdata <= evt_wdata6_reg;
-          REG_STREAM_CTRL:  s_axi_rdata <= {29'h0, eof_seen_shadow,
+          REG_STREAM_CTRL:  s_axi_rdata <= {28'h0, dma_mode_cfg_reg, eof_seen_shadow,
                                             write_overflow_sticky_reg, mode_stream_cfg_reg};
           REG_OCCUPANCY:    s_axi_rdata <= stream_occupancy_axi;
           REG_FREE_SPACE:   s_axi_rdata <= stream_fifo_free_space_axi;
