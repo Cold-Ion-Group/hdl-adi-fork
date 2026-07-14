@@ -40,6 +40,15 @@ set awg_tx_out_div [get_env_param AWG_TX_OUT_DIV 1]
 
 create_bd_port -dir I dac_fifo_bypass
 
+# SFP0 GT pins for the Phase E.2 10G Ethernet dataplane.  The low-speed
+# module/status/control pins are handled in system_top.v via spare AXI GPIO bits.
+create_bd_port -dir I sfp0_ref_clk_p
+create_bd_port -dir I sfp0_ref_clk_n
+create_bd_port -dir I sfp0_rx_p
+create_bd_port -dir I sfp0_rx_n
+create_bd_port -dir O sfp0_tx_p
+create_bd_port -dir O sfp0_tx_n
+
 # dac peripherals
 # JESD204 PHY layer peripheral
 ad_ip_instance axi_adxcvr axi_ad9144_xcvr [list \
@@ -120,6 +129,73 @@ ad_ip_instance axi_dmac axi_sched_dma [list \
   MAX_BYTES_PER_BURST 128 \
   DMA_AXI_PROTOCOL_SRC 1 \
 ]
+
+ad_ip_instance xxv_ethernet eth_mac_10g
+ad_ip_parameter eth_mac_10g CONFIG.LINE_RATE 10
+ad_ip_parameter eth_mac_10g CONFIG.NUM_OF_CORES 1
+ad_ip_parameter eth_mac_10g CONFIG.CORE {Ethernet MAC+PCS/PMA 64-bit}
+ad_ip_parameter eth_mac_10g CONFIG.BASE_R_KR {BASE-R}
+ad_ip_parameter eth_mac_10g CONFIG.GT_REF_CLK_FREQ 156.25
+ad_ip_parameter eth_mac_10g CONFIG.GT_DRP_CLK 100.00
+ad_ip_parameter eth_mac_10g CONFIG.INCLUDE_AXI4_INTERFACE 1
+ad_ip_parameter eth_mac_10g CONFIG.INCLUDE_USER_FIFO 1
+ad_ip_parameter eth_mac_10g CONFIG.INCLUDE_STATISTICS_COUNTERS 1
+
+# Provisional SFP0 lane selection.  Do not treat this as board-pin verified:
+# sfp0_system_constr.xdc intentionally gates package-pin enablement until the
+# KCU116 schematic/user guide mapping has been checked.
+ad_ip_parameter eth_mac_10g CONFIG.GT_GROUP_SELECT Quad_X0Y1
+ad_ip_parameter eth_mac_10g CONFIG.LANE1_GT_LOC X0Y4
+
+ad_ip_instance axi_dmac axi_eth_rx_dma [list \
+  DMA_TYPE_SRC 1 \
+  DMA_TYPE_DEST 0 \
+  AXI_SLICE_SRC 1 \
+  AXI_SLICE_DEST 1 \
+  DMA_LENGTH_WIDTH 24 \
+  DMA_2D_TRANSFER 0 \
+  CYCLIC 0 \
+  ID 3 \
+  DMA_DATA_WIDTH_SRC 64 \
+  DMA_DATA_WIDTH_DEST 256 \
+  MAX_BYTES_PER_BURST 128 \
+  DMA_AXI_PROTOCOL_DEST 1 \
+]
+
+ad_ip_instance axi_dmac axi_eth_tx_dma [list \
+  DMA_TYPE_SRC 0 \
+  DMA_TYPE_DEST 1 \
+  AXI_SLICE_SRC 1 \
+  AXI_SLICE_DEST 1 \
+  DMA_LENGTH_WIDTH 24 \
+  DMA_2D_TRANSFER 0 \
+  CYCLIC 0 \
+  ID 4 \
+  DMA_DATA_WIDTH_SRC 256 \
+  DMA_DATA_WIDTH_DEST 64 \
+  MAX_BYTES_PER_BURST 128 \
+  DMA_AXI_PROTOCOL_SRC 1 \
+]
+
+ad_ip_instance xlconstant eth_axis_zero_1
+ad_ip_parameter eth_axis_zero_1 CONFIG.CONST_WIDTH 1
+ad_ip_parameter eth_axis_zero_1 CONFIG.CONST_VAL 0
+
+ad_ip_instance xlconstant eth_axis_zero_4
+ad_ip_parameter eth_axis_zero_4 CONFIG.CONST_WIDTH 4
+ad_ip_parameter eth_axis_zero_4 CONFIG.CONST_VAL 0
+
+ad_ip_instance xlconstant eth_axis_zero_8
+ad_ip_parameter eth_axis_zero_8 CONFIG.CONST_WIDTH 8
+ad_ip_parameter eth_axis_zero_8 CONFIG.CONST_VAL 0
+
+ad_ip_instance xlconstant eth_axis_zero_56
+ad_ip_parameter eth_axis_zero_56 CONFIG.CONST_WIDTH 56
+ad_ip_parameter eth_axis_zero_56 CONFIG.CONST_VAL 0
+
+ad_ip_instance xlconstant eth_gt_outclksel
+ad_ip_parameter eth_gt_outclksel CONFIG.CONST_WIDTH 3
+ad_ip_parameter eth_gt_outclksel CONFIG.CONST_VAL 4
 
 
 
@@ -268,6 +344,69 @@ ad_connect axi_sched_dma/m_axis_data awg_timed_ctrl_0/dma_s_axis_tdata
 ad_connect axi_sched_dma/m_axis_valid awg_timed_ctrl_0/dma_s_axis_tvalid
 ad_connect axi_sched_dma/m_axis_ready awg_timed_ctrl_0/dma_s_axis_tready
 
+# 10G Ethernet MAC, RX DMA, and TX DMA.
+set eth_gt_rxp_pin [get_bd_pins -quiet eth_mac_10g/gt_rxp_in_0]
+if {$eth_gt_rxp_pin eq ""} {
+  set eth_gt_rxp_pin [get_bd_pins eth_mac_10g/gt_rxp_in]
+}
+set eth_gt_rxn_pin [get_bd_pins -quiet eth_mac_10g/gt_rxn_in_0]
+if {$eth_gt_rxn_pin eq ""} {
+  set eth_gt_rxn_pin [get_bd_pins eth_mac_10g/gt_rxn_in]
+}
+set eth_gt_txp_pin [get_bd_pins -quiet eth_mac_10g/gt_txp_out_0]
+if {$eth_gt_txp_pin eq ""} {
+  set eth_gt_txp_pin [get_bd_pins eth_mac_10g/gt_txp_out]
+}
+set eth_gt_txn_pin [get_bd_pins -quiet eth_mac_10g/gt_txn_out_0]
+if {$eth_gt_txn_pin eq ""} {
+  set eth_gt_txn_pin [get_bd_pins eth_mac_10g/gt_txn_out]
+}
+
+ad_connect sfp0_ref_clk_p eth_mac_10g/gt_refclk_p
+ad_connect sfp0_ref_clk_n eth_mac_10g/gt_refclk_n
+connect_bd_net [get_bd_ports sfp0_rx_p] $eth_gt_rxp_pin
+connect_bd_net [get_bd_ports sfp0_rx_n] $eth_gt_rxn_pin
+connect_bd_net $eth_gt_txp_pin [get_bd_ports sfp0_tx_p]
+connect_bd_net $eth_gt_txn_pin [get_bd_ports sfp0_tx_n]
+
+ad_connect sys_cpu_clk eth_mac_10g/dclk
+ad_connect sys_cpu_clk eth_mac_10g/s_axi_aclk_0
+ad_connect sys_cpu_resetn eth_mac_10g/s_axi_aresetn_0
+ad_connect sys_cpu_reset eth_mac_10g/sys_reset
+ad_connect sys_cpu_reset eth_mac_10g/rx_reset_0
+ad_connect sys_cpu_reset eth_mac_10g/tx_reset_0
+ad_connect sys_cpu_reset eth_mac_10g/gtwiz_reset_rx_datapath_0
+ad_connect sys_cpu_reset eth_mac_10g/gtwiz_reset_tx_datapath_0
+ad_connect sys_cpu_reset eth_mac_10g/qpllreset_in_0
+ad_connect eth_mac_10g/rx_clk_out_0 eth_mac_10g/rx_core_clk_0
+ad_connect eth_gt_outclksel/dout eth_mac_10g/rxoutclksel_in_0
+ad_connect eth_gt_outclksel/dout eth_mac_10g/txoutclksel_in_0
+ad_connect eth_axis_zero_1/dout eth_mac_10g/ctl_tx_send_idle_0
+ad_connect eth_axis_zero_1/dout eth_mac_10g/ctl_tx_send_lfi_0
+ad_connect eth_axis_zero_1/dout eth_mac_10g/ctl_tx_send_rfi_0
+ad_connect eth_axis_zero_1/dout eth_mac_10g/pm_tick_0
+ad_connect eth_axis_zero_56/dout eth_mac_10g/tx_preamblein_0
+ad_connect eth_axis_zero_1/dout eth_mac_10g/tx_axis_tuser_0
+
+ad_connect eth_mac_10g/rx_clk_out_0 axi_eth_rx_dma/s_axis_aclk
+ad_connect sys_cpu_resetn axi_eth_rx_dma/m_dest_axi_aresetn
+ad_connect eth_mac_10g/rx_axis_tdata_0 axi_eth_rx_dma/s_axis_data
+ad_connect eth_mac_10g/rx_axis_tkeep_0 axi_eth_rx_dma/s_axis_keep
+ad_connect eth_mac_10g/rx_axis_tkeep_0 axi_eth_rx_dma/s_axis_strb
+ad_connect eth_mac_10g/rx_axis_tvalid_0 axi_eth_rx_dma/s_axis_valid
+ad_connect eth_mac_10g/rx_axis_tlast_0 axi_eth_rx_dma/s_axis_last
+ad_connect eth_mac_10g/rx_axis_tuser_0 axi_eth_rx_dma/s_axis_user
+ad_connect eth_axis_zero_8/dout axi_eth_rx_dma/s_axis_id
+ad_connect eth_axis_zero_4/dout axi_eth_rx_dma/s_axis_dest
+
+ad_connect eth_mac_10g/tx_clk_out_0 axi_eth_tx_dma/m_axis_aclk
+ad_connect sys_cpu_resetn axi_eth_tx_dma/m_src_axi_aresetn
+ad_connect axi_eth_tx_dma/m_axis_data eth_mac_10g/tx_axis_tdata_0
+ad_connect axi_eth_tx_dma/m_axis_keep eth_mac_10g/tx_axis_tkeep_0
+ad_connect axi_eth_tx_dma/m_axis_valid eth_mac_10g/tx_axis_tvalid_0
+ad_connect axi_eth_tx_dma/m_axis_last eth_mac_10g/tx_axis_tlast_0
+ad_connect eth_mac_10g/tx_axis_tready_0 axi_eth_tx_dma/m_axis_ready
+
 
 
 
@@ -279,6 +418,9 @@ ad_cpu_interconnect 0x44A04000 axi_ad9144_tpl
 ad_cpu_interconnect 0x44A90000 axi_ad9144_jesd
 ad_cpu_interconnect 0x44AA0000 awg_timed_ctrl_0
 ad_cpu_interconnect 0x44AB0000 axi_sched_dma
+ad_cpu_interconnect 0x44C00000 eth_mac_10g s_axi_0
+ad_cpu_interconnect 0x44AC0000 axi_eth_rx_dma
+ad_cpu_interconnect 0x44AD0000 axi_eth_tx_dma
 ad_cpu_interconnect 0x7c420000 axi_ad9144_dma
 
 
@@ -288,6 +430,9 @@ ad_mem_hp1_interconnect $sys_cpu_clk sys_ps7/S_AXI_HP1
 ad_mem_hp1_interconnect $sys_cpu_clk axi_ad9144_dma/m_src_axi
 ad_mem_hp2_interconnect $sys_cpu_clk sys_ps7/S_AXI_HP2
 ad_mem_hp2_interconnect $sys_cpu_clk axi_sched_dma/m_src_axi
+ad_mem_hp3_interconnect $sys_cpu_clk sys_ps7/S_AXI_HP3
+ad_mem_hp3_interconnect $sys_cpu_clk axi_eth_rx_dma/m_dest_axi
+ad_mem_hp3_interconnect $sys_cpu_clk axi_eth_tx_dma/m_src_axi
 
 
 # interrupts
@@ -296,6 +441,12 @@ ad_cpu_interrupt ps-10 mb-15 axi_ad9144_jesd/irq
 
 ad_cpu_interrupt ps-12 mb-13 axi_ad9144_dma/irq
 ad_cpu_interrupt ps-13 mb-12 axi_sched_dma/irq
+ad_cpu_interrupt ps-14 mb-10 axi_eth_rx_dma/irq
+ad_cpu_interrupt ps-15 mb-9 axi_eth_tx_dma/irq
+
+# PG203 xxv_ethernet v4.0 does not expose a discrete interrupt pin in the
+# AXI4-Lite MAC+PCS/PMA configuration used here; firmware can poll MAC status
+# registers at 0x44C00000 until an interrupt-capable configuration is proven.
 
 
 

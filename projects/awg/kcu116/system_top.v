@@ -14,6 +14,20 @@ module system_top #(
   input                   uart_sin,      // UART serial input
   output                  uart_sout,     // UART serial output
 
+  // SFP0 10G Ethernet Interface
+  input                   sfp0_ref_clk_p,
+  input                   sfp0_ref_clk_n,
+  input                   sfp0_rx_p,
+  input                   sfp0_rx_n,
+  output      [0:0]       sfp0_tx_p,
+  output      [0:0]       sfp0_tx_n,
+  output                  sfp0_tx_disable,
+  output                  sfp0_rate_select0,
+  output                  sfp0_rate_select1,
+  input                   sfp0_mod_abs,
+  input                   sfp0_rx_los,
+  input                   sfp0_tx_fault,
+
   // DDR4 Interface
   output                  ddr4_act_n,    // DDR4 activate command
   output      [16:0]      ddr4_addr,     // DDR4 address bus
@@ -131,6 +145,15 @@ module system_top #(
   // Assign DAC FIFO bypass signal
   assign dac_fifo_bypass = gpio_o[18];
 
+  // SFP0 low-speed module/status/control signals are exposed on spare GPIO bits.
+  assign gpio_i[23] = sfp0_mod_abs;
+  assign gpio_i[24] = sfp0_rx_los;
+  assign gpio_i[25] = sfp0_tx_fault;
+  assign sfp0_tx_disable = gpio_o[26];
+  assign sfp0_rate_select0 = gpio_o[27];
+  assign sfp0_rate_select1 = gpio_o[28];
+  assign gpio_i[28:26] = gpio_o[28:26];
+
   // Instantiate GPIO buffers for board GPIOs
   ad_iobuf #(
     .DATA_WIDTH(17)                     // 17-bit GPIO buffer
@@ -142,7 +165,7 @@ module system_top #(
   );
 
   // Connect unused GPIOs
-  assign gpio_i[63:23] = gpio_o[63:23];
+  assign gpio_i[63:29] = gpio_o[63:29];
   assign gpio_i[20:19] = gpio_o[20:19];
 
   // Instantiate system wrapper
@@ -183,6 +206,14 @@ module system_top #(
     .spi_sdi_i       (spi_miso),
     .spi_sdo_i       (spi_mosi),
     .spi_sdo_o       (spi_mosi),
+
+    // SFP0 10G Ethernet Interface
+    .sfp0_ref_clk_n  (sfp0_ref_clk_n),
+    .sfp0_ref_clk_p  (sfp0_ref_clk_p),
+    .sfp0_rx_n       (sfp0_rx_n),
+    .sfp0_rx_p       (sfp0_rx_p),
+    .sfp0_tx_n       (sfp0_tx_n),
+    .sfp0_tx_p       (sfp0_tx_p),
 
     // System Clock and Reset
     .sys_clk_clk_n   (sys_clk_n),

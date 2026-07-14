@@ -47,7 +47,8 @@ adi_project_files awg_kcu116 [list \
 "../common/awg_spi.v" \
   "../common/jesd_sysref_sync.v" \
   "system_top.v" \
-  "system_constr.xdc"\
+  "system_constr.xdc" \
+  "sfp0_system_constr.xdc" \
   "$ad_hdl_dir/library/common/ad_iobuf.v" \
   "$ad_hdl_dir/projects/common/kcu116/kcu116_system_constr.xdc" ]
 

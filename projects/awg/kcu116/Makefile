@@ -8,6 +8,7 @@ M_DEPS += ../common/awg_spi.v
 M_DEPS += ../common/jesd_sysref_sync.v
 M_DEPS += ../common/awg_bd.tcl
 M_DEPS += ../common/config.tcl
+M_DEPS += sfp0_system_constr.xdc
 
 M_DEPS += ../../scripts/adi_pd.tcl
 M_DEPS += ../../common/xilinx/dacfifo_bd.tcl
