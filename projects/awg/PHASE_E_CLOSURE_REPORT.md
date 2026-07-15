@@ -7,6 +7,7 @@ Scope: HDL/build-only closure for E.1 scheduler DMA refill plus E.2 10G SFP0 MAC
 - Verification date: 2026-07-15.
 - Vivado: 2021.2, SW Build 3367213, IP Build 3369179.
 - Git base commit verified: `7eafe892e`.
+- Phase E closure commit: `2e31480ec`.
 - E.1 commits are present through scheduler DMA mode, KCU116 scheduler DMA BD wiring, and DMA-mode regressions.
 - E.2 HDL datapath commit is present with PG203 `xxv_ethernet`, RX DMA, and TX DMA.
 - SFP0 pin source: AMD/Xilinx KCU116 Board User Guide UG1239 v1.3, Tables 3-8 and 3-10.
@@ -66,3 +67,6 @@ The Vivado build commands were run outside the sandbox because local Vivado chil
 
 - Install a full PG203 `xxv_ethernet` license, then reset/regenerate `eth_mac_10g` output products and rerun `phase_e_build.ps1` without `allow_license_block`.
 - After licensed bitstream generation succeeds, rerun `phase_e_post_impl_verify.tcl` without `allow_license_block` so the bitstream and XSA checks become hard pass/fail gates.
+- Close Phase F firmware/runtime work using `PHASE_F_FIRMWARE_CLOSURE_PROMPT.md`:
+  scheduler driver, DDR event ring, scheduler DMA refill, PG203 MAC bring-up,
+  Ethernet RX/TX DMA, minimal ARP/UDP transport, host sender, and runtime soak.

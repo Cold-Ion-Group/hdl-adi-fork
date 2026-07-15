@@ -49,6 +49,22 @@ comes directly from AD9516 OUT9.
 | PN7/PN15 | PRBS generators | Datapath integrity verification |
 | DMA | DDR via AXI DMAC | Arbitrary waveform playback (not yet exercised) |
 
+### Phase E scheduler and Ethernet datapaths
+
+The current HDL also contains the Phase E streaming-control datapaths:
+
+| Block | Address | Role |
+|---|---:|---|
+| `awg_timed_ctrl_0` | `0x44AA0000` | Timestamped scheduler, legacy preload mode, software stream mode, DMA stream ingress |
+| `axi_sched_dma` | `0x44AB0000` | DDR event ring to scheduler FIFO, 256-bit MM to 256-bit AXIS |
+| `eth_mac_10g` | `0x44C00000` | PG203 `xxv_ethernet` 10G SFP0 MAC/PCS/PMA, AXI-Lite managed, polled |
+| `axi_eth_rx_dma` | `0x44AC0000` | Ethernet RX AXIS to DDR, 64-bit AXIS to 256-bit MM |
+| `axi_eth_tx_dma` | `0x44AD0000` | DDR to Ethernet TX AXIS, 256-bit MM to 64-bit AXIS |
+
+These blocks are present in the routed HDL design. Firmware and live UDP stream
+runtime validation are Phase F work. Bitstream/XSA generation is currently
+blocked on the local PG203 license; see `PHASE_E_CLOSURE_REPORT.md`.
+
 The AD9144's receive-side XBAR remaps physical lanes {4,5,6,7} → logical {0,1,2,3}
 with polarity inversion on lane 2 to match the FMC-EBZ board routing.
 
@@ -56,7 +72,7 @@ with polarity inversion on lane 2 to match the FMC-EBZ board routing.
 
 - **Exact probe point**: `marker_commit` top-level HDL port on `system_top`.
 - **Constraint location**: PACKAGE pin `AF19`, `IOSTANDARD LVCMOS18`.
-- **Signal polarity**: active-high pulse (1 = commit event), generated for one scheduler clock cycle when the scheduler commit handshake is accepted.
+- **Signal polarity**: active-high pulse (1 = fired event), generated for one scheduler clock cycle in the scheduler `FIRE` state after the event passes deadline and spacing checks.
 - **Hookup note**: probe `marker_commit` single-ended to ground; use this edge as the deterministic timestamp reference for commit-to-output latency measurements.
 
 ## 3. JESD204B Link
@@ -137,11 +153,16 @@ main()
 - Host UART RTT baseline (~3.5 ms average round-trip)
 - Manifest-checked builds (`gen_manifest.ps1` tracks XSA + firmware commit)
 - Host automation via `run_nco_scope_test.py` (DDS-band, SFDR, throughput, UART RTT)
+- HDL/build-closed Phase E scheduler DMA ingress and SFP0 10G Ethernet RX/TX
+  DMA datapaths, routed timing clean, pending PG203 licensed bitstream/XSA
 
 **Not yet validated:**
 
 - Deterministic latency across 5+ power cycles (infrastructure built, captures pending)
 - DMA waveform playback from DDR
+- Phase F firmware for scheduler DMA refill and 10G UDP transport
+- Licensed PG203 bitstream/XSA generation for the Phase E Ethernet design
+- Live scheduler DMA refill and Ethernet streaming runtime soak
 - JESD modes other than mode 4
 - Acceptance-grade SFDR (current baseline ~48–60 dBc, target ≥85 dBc)
 - Phase-noise measurement
@@ -154,11 +175,20 @@ main()
 | `projects/fmcdac/src/app/fmcdac.c` | All firmware logic (setup, test, DDS, diagnostics) |
 | `drivers/dac/ad9144/ad9144.c` | AD9144 driver (PLL, JESD link, NCO, SYSREF) |
 | `projects/fmcdac/src/app/parameters.h` | Base addresses, pin mappings, AD9516 output indices |
+| `projects/awg/common/awg_timed_ctrl.v` | Scheduler RTL and stream/DMA ingress ABI |
+| `projects/awg/common/awg_sched_regs.h` | Scheduler register constants for firmware |
+| `projects/awg/PHASE_E_CLOSURE_REPORT.md` | HDL/build closure status and residual license blocker |
+| `projects/awg/PHASE_F_FIRMWARE_CLOSURE_PROMPT.md` | Firmware closure handoff for scheduler DMA refill and 10G transport |
 | `projects/fmcdac/docu/clock_architecture.md` | Clock tree reference (frequencies, SYSREF policy) |
 | `projects/fmcdac/docu/CURRENT_EVALUATION_STATUS.md` | Active evaluation status and latest baselines |
 | `projects/fmcdac/docu/BENCHMARK_RESULTS_AND_HISTORY.md` | Measurement history and run artifacts |
 
 ## 8. Forward Plan
+
+0. **Phase F firmware closure** - use `PHASE_F_FIRMWARE_CLOSURE_PROMPT.md` to
+   implement scheduler DMA refill, PG203 MAC bring-up, Ethernet RX/TX DMA,
+   minimal ARP/UDP transport, host sender, and runtime soak. This requires a
+   licensed Phase E bitstream/XSA.
 
 1. **SFDR refinement** — improve measurement confidence; determine how much of the
    current ~48–60 dBc baseline is converter/board vs bench configuration.
@@ -260,7 +290,7 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | Absolute address | Offset | Register | Access | Reset | Notes |
 |---|---:|---|---|---|---|
 | `0x44AA0000` | `0x00` | `CTRL` | RW | `0` | `[0]`=run(pulse), `[1]`=arm(pulse), `[2]`=stop(pulse), `[3]`=reset\_soft(pulse), `[8]`=irq\_en(sticky) |
-| `0x44AA0004` | `0x04` | `STATUS` | RO | `0` | `[0]`=armed, `[1]`=running, `[2]`=done, `[3]`=error, `[15:8]`=err\_code |
+| `0x44AA0004` | `0x04` | `STATUS` | RO | `0` | `[0]`=armed, `[1]`=running, `[2]`=done, `[3]`=error, `[15:8]`=err\_code; idle has no active state bit set |
 | `0x44AA0008` | `0x08` | `EVENT_COUNT` | RW | `0` | Active event count (write only when `!armed && !running`) |
 | `0x44AA000C` | `0x0C` | `CUR_EVENT` | RO | `0` | Number of events fired so far (snapshot sets `read_ptr + 1` on each `FIRE`; value is `0` before first fire) |
 | `0x44AA0010` | `0x10` | `ERR_REG` | RO | `0` | Mirror of `STATUS[15:8]` for firmware compatibility |
@@ -274,7 +304,7 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `0x44AA0030` | `0x30` | `COMMIT_COUNT` | RO | `0` | Number of events successfully fired |
 | `0x44AA0034` | `0x34` | `REINIT_COUNT` | RO | `0` | Number of successful fired events with `flags[0]` (PHASE_REINIT) |
 | `0x44AA0038` | `0x38` | `REINIT_REJECT` | RO | `0` | Number of rejected PHASE_REINIT events (deadline miss or spacing rejection) |
-| `0x44AA003C` | `0x3C` | `IRQ_STATUS` | RW1C | `0` | `[0]`=done, `[1]`=error, `[2]`=spacing\_violation, `[3]`=underrun |
+| `0x44AA003C` | `0x3C` | `IRQ_STATUS` | RW1C | `0` | `[0]`=done, `[1]`=error, `[2]`=spacing\_violation, `[3]`=underrun, `[4]`=low\_watermark, `[5]`=empty\_stall |
 | `0x44AA0040` | `0x40` | `EVT_WADDR` | RW | `0` | Event write address |
 | `0x44AA0044` | `0x44` | `EVT_WDATA0` | RW | `0` | Event `timestamp[31:0]` |
 | `0x44AA0048` | `0x48` | `EVT_WDATA1` | RW | `0` | Event `timestamp[63:32]` |
@@ -289,6 +319,13 @@ An AXI-Lite timed-control peripheral is inserted in the AWG BD as
 | `0x44AA006C` | `0x6C` | `TIME_RELOAD_LO` | RW | `0` | Pending scheduler epoch reload value `[31:0]` |
 | `0x44AA0070` | `0x70` | `TIME_RELOAD_HI` | RW | `0` | Pending scheduler epoch reload value `[63:32]` |
 | `0x44AA0074` | `0x74` | `TIME_RELOAD_CTRL` | RW | `0` | `[0]`=load on next SYSREF, `[1]`=load now |
+| `0x44AA0078` | `0x78` | `STREAM_CTRL` | RW | `0` | `[0]`=stream mode, `[1]`=overflow W1C, `[2]`=EOF seen RO, `[3]`=DMA mode |
+| `0x44AA007C` | `0x7C` | `OCCUPANCY` | RO | `0` | Stream FIFO occupancy in events |
+| `0x44AA0080` | `0x80` | `FREE_SPACE` | RO | depth | Stream FIFO free space in events; firmware refill truth |
+| `0x44AA0084` | `0x84` | `LOW_WMARK` | RW | `0` | Runtime low-watermark threshold in events |
+| `0x44AA0088` | `0x88` | `STREAM_DEPTH` | RO | param | Usable stream FIFO depth in events |
+| `0x44AA008C` | `0x8C` | `STREAM_PUSHES` | RO | `0` | Accepted stream pushes, including DMA beats |
+| `0x44AA0090` | `0x90` | `STREAM_STALLS` | RO | `0` | Scheduler cycles spent waiting on an empty stream FIFO |
 
 #### Event word layout (256 bits stored per slot)
 
@@ -310,6 +347,11 @@ For scheduled DDS override events, payload bits are interpreted as:
 
 Current scheduler binding drives the same scheduled `{scale,init,incr}` values
 into DDS tone 0 and tone 1 for the selected channel.
+
+In stream mode, `STREAM_CTRL[0]` selects stream execution and `STREAM_CTRL[3]`
+selects DMA ingress. Both bits are captured at `CTRL.ARM` and remain locked
+until the next arm. Software stream pushes use `EVT_WCTRL`; DMA stream pushes
+arrive through the packaged `dma_s_axis` port from `axi_sched_dma`.
 
 #### Clocking / CDC contract
 
@@ -369,5 +411,8 @@ enabled. Software clears bits in `IRQ_STATUS` with RW1C writes.
 
 #### Deferred items (future PRs)
 
+- **Phase F firmware:** scheduler driver, DDR event ring, scheduler DMA refill,
+  PG203 MAC bring-up, Ethernet RX/TX DMA, minimal ARP/UDP transport, host sender,
+  and runtime soak. See `PHASE_F_FIRMWARE_CLOSURE_PROMPT.md`.
 - **Step 6 (quality gates):** cocotb directed test (N events, spacing violation,
   missed deadline); SBY liveness on CDC handshake pairs; IP-XACT packaging.

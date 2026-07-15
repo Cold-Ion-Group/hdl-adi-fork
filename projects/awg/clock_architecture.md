@@ -152,6 +152,19 @@ loads without waiting for SYSREF.
 | AXI/CPU | MicroBlaze | 100 MHz | System clock |
 | SPI | AXI SPI | ≤ 50 MHz | Register access |
 
+## Phase E SFP0 Ethernet Clock
+
+The Phase E 10G Ethernet path uses the KCU116 SFP0 MGT reference clock, not the
+AD9516 JESD clock tree:
+
+| Signal | Frequency | Source | Destination | Notes |
+|--------|-----------|--------|-------------|-------|
+| SFP0 GT refclk | 156.25 MHz | KCU116 USER_MGT_SI570_CLOCK_C | PG203 `eth_mac_10g` GT refclk | MGTREFCLK1_226, constrained in `sfp0_system_constr.xdc` |
+
+This clock is independent of OUT1/OUT6/OUT7/OUT9. Ethernet link-up, MAC reset,
+and RX/TX user clocks are PG203-owned. Firmware should treat the MAC as a
+separate clocking island and poll PG203 link/status registers at `0x44C00000`.
+
 ## AD9516 Register Settings (Key)
 
 | Register | Value | Description |

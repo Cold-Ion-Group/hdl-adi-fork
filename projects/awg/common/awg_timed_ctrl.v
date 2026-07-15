@@ -18,7 +18,8 @@
 //   0x30  COMMIT_COUNT  RO  number of events successfully fired
 //   0x34  REINIT_COUNT  RO  number of successful PHASE_REINIT events
 //   0x38  REINIT_REJECT RO  number of rejected PHASE_REINIT events
-//   0x3C  IRQ_STATUS    RW1C [0]=done, [1]=error, [2]=spacing_violation, [3]=underrun
+//   0x3C  IRQ_STATUS    RW1C [0]=done, [1]=error, [2]=spacing_violation, [3]=underrun,
+//                            [4]=low_watermark, [5]=empty_stall
 //   0x40  EVT_WADDR     RW  event write address
 //   0x44  EVT_WDATA0    RW  event timestamp[31:0]
 //   0x48  EVT_WDATA1    RW  event timestamp[63:32]
@@ -62,9 +63,8 @@
 //   ADVANCE -> (last event) -> DONE
 //   DONE/ERROR -> (stay until stop/reset_soft)
 //
-// Deferred (future PRs):
-//   Step 4: TPL DDS scheduled-control port wiring (library/jesd204/)
-//   Step 6: Cocotb tests, SBY liveness, IP-XACT packaging
+// Future quality gates:
+//   Cocotb directed tests, SBY liveness, IP-XACT packaging
 
 module awg_timed_ctrl #(
   parameter integer EVENT_MEM_ADDR_WIDTH = 8,

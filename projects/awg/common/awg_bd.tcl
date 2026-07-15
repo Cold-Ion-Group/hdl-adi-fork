@@ -141,9 +141,8 @@ ad_ip_parameter eth_mac_10g CONFIG.INCLUDE_AXI4_INTERFACE 1
 ad_ip_parameter eth_mac_10g CONFIG.INCLUDE_USER_FIFO 1
 ad_ip_parameter eth_mac_10g CONFIG.INCLUDE_STATISTICS_COUNTERS 1
 
-# Provisional SFP0 lane selection.  Do not treat this as board-pin verified:
-# sfp0_system_constr.xdc intentionally gates package-pin enablement until the
-# KCU116 schematic/user guide mapping has been checked.
+# SFP0 lane selection verified against UG1239 v1.3 Tables 3-8 and 3-10.
+# The matching package pins are constrained in kcu116/sfp0_system_constr.xdc.
 ad_ip_parameter eth_mac_10g CONFIG.GT_GROUP_SELECT Quad_X0Y1
 ad_ip_parameter eth_mac_10g CONFIG.LANE1_GT_LOC X0Y4
 

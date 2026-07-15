@@ -14,8 +14,9 @@ This document describes the implemented architecture in this repository:
   - OUT6 = DAC SYSREF
   - OUT7 = FPGA SYSREF
   - OUT9 = FPGA REFCLK
+- Current Phase E HDL state: timestamped scheduler, software stream FIFO, DMA scheduler refill, SFP0 PG203 10G MAC, Ethernet RX DMA, and Ethernet TX DMA are implemented in HDL and routed timing-clean. Bitstream/XSA generation is blocked on the local PG203 license.
 - Ultimate target capability: preserve the broader 10–450 MHz / quad-channel AWG framing. This document explains the current datapath and the hooks for later phases; it does not redefine the end goal downward.
-- Open / later-phase options: DMA playback, AD9144 on-chip NCO placement, image-zone filtering, and true >491.52 MHz FPGA-generated bandwidth expansion remain distinct paths and should not be conflated with the current default DDS datapath.
+- Open / later-phase options: Phase F firmware/runtime closure, DMA playback validation, AD9144 on-chip NCO placement, image-zone filtering, and true >491.52 MHz FPGA-generated bandwidth expansion remain distinct paths and should not be conflated with the current default DDS datapath.
 
 --------------------------------------------------------------------------------
 
@@ -164,6 +165,39 @@ Notes:
 
 --------------------------------------------------------------------------------
 
+## 5A) Phase E Scheduler and Ethernet Producer Chain
+
+```mermaid
+flowchart LR
+  HOST[Host UDP sender] --> SFP[SFP0 10G link]
+  SFP --> MAC[eth_mac_10g PG203\n0x44C00000]
+  MAC --> RXDMA[axi_eth_rx_dma\nAXIS to DDR\n0x44AC0000]
+  RXDMA --> RAW[DDR raw frame buffers]
+  RAW --> FW[MicroBlaze Phase F firmware\nvalidate frames and event ring]
+  FW --> ERING[DDR event ring\n32 byte events]
+  ERING --> SDMA[axi_sched_dma\nDDR to AXIS\n0x44AB0000]
+  SDMA --> FIFO[awg_timed_ctrl stream FIFO\n511 usable events by default]
+  FIFO --> SCHED[Timestamped scheduler\n0x44AA0000]
+  SCHED --> TPLSCHED[Scheduled DDS control pins]
+  TPLSCHED --> TPL[AD9144 TPL DDS controls]
+```
+
+Current HDL status:
+- `awg_timed_ctrl_0` supports legacy preload, software stream pushes, and DMA
+  stream ingress selected by `STREAM_CTRL[3]`.
+- `axi_sched_dma` is memory-to-AXIS, 256-bit to 256-bit, non-cyclic, HP2.
+- `axi_eth_rx_dma` is AXIS-to-memory, 64-bit to 256-bit, non-cyclic, HP3.
+- `axi_eth_tx_dma` is memory-to-AXIS, 256-bit to 64-bit, non-cyclic, HP3.
+- `eth_mac_10g` is PG203 `xxv_ethernet` v4.0 on SFP0 and is AXI-Lite polled.
+
+Current firmware/runtime status:
+- Phase F firmware is pending. The current no-OS `fmcdac` app has no scheduler
+  DMA refill or Ethernet UDP transport modules yet.
+- The Phase E HDL reached routed implementation with clean timing, but local
+  bitstream/XSA generation is blocked until a full PG203 license is available.
+
+--------------------------------------------------------------------------------
+
 ## 6) Datapath C: STPL and TPL PN Test Paths
 
 ```mermaid
@@ -242,16 +276,21 @@ Implemented and exercised in the current default baseline:
 
 - **Probe signal**: `marker_commit` top-level output from `projects/awg/kcu116/system_top.v`.
 - **Physical pin**: `AF19` (`LVCMOS18`) in `projects/awg/kcu116/system_constr.xdc`.
-- **Polarity / behavior**: **active-high pulse**, one `sched_clk` cycle wide, asserted when the timed-control scheduler accepts a commit request (`commit_req_sync2 ^ commit_req_sync2_d` event in `awg_timed_ctrl`).
+- **Polarity / behavior**: **active-high pulse**, one `sched_clk` cycle wide, asserted in the scheduler `FIRE` state for each successfully fired event.
 - **Measurement hookup**: connect oscilloscope/logic-analyzer tip to the routed marker pin and reference to board ground to timestamp commit edges versus SYSREF/SYNC events.
 
 Implemented but not part of the current primary automated benchmark path:
 - DMA waveform path through DMAC and util_dacfifo.
+- Timestamped event scheduler with legacy preload, software stream mode, DMA
+  stream ingress, low-watermark IRQ, empty-stall IRQ, EOF handling, and
+  `marker_commit`.
+- SFP0 10G Ethernet HDL datapath with PG203 MAC plus RX/TX DMAs.
 - Optional AD9144 on-chip NCO control for later placement experiments.
 - DMA playback or alternate-source experiments as a discriminator if DDS-band or SFDR evidence later requires them.
 
 Blocked or later-phase architectural work:
+- Phase F firmware/runtime closure for scheduler DMA refill and 10G UDP stream.
+- PG203 licensed bitstream/XSA generation on the local tool installation.
 - True >491.52 MHz FPGA-generated bandwidth expansion via a different JESD/HDL architecture; the current driver "mode 9" does not provide that capability.
-- Timestamped event scheduler.
 - Hardware list and branch playback engine with deterministic branch latency.
 - Atomic staged commit unit for time-tagged FTW/POW/ASF updates.

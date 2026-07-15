@@ -16,6 +16,22 @@ The proposed spec uses **datasheet‑anchored envelope limits** (AD9144 sample r
 - **Ultimate capability target:** preserve the intended **10–450 MHz / quad-channel** AWG framing. The current baseline and the final target are intentionally distinct claims.
 - **Open or later-phase paths:** acceptance-grade phase noise, multi-boot deterministic-latency capture, dynamic SFDR during rapid retunes/chirps, raw PHY-level PRBS generation, DMA playback, NCO-assisted placement, image-mode filtering, and true >491.52 MHz FPGA-generated bandwidth expansion remain separate work items.
 
+### Current HDL/firmware status (July 2026)
+
+- Phase E HDL is implemented for KCU116: scheduler DMA ingress, SFP0 PG203
+  `xxv_ethernet`, Ethernet RX DMA, and Ethernet TX DMA are present in the block
+  design and routed timing-clean.
+- Local bitstream/XSA generation is blocked by the installed PG203 license. The
+  design reached routed implementation; the license failure occurs at
+  `write_bitstream`.
+- Firmware Phase F is pending. The current no-OS `fmcdac` app has AD9144/JESD
+  bring-up and the existing DAC DMA example, but no scheduler DMA refill,
+  PG203 MAC management, Ethernet RX/TX DMA transport, ARP/UDP parser, or host
+  UDP sender modules yet.
+- Publication claims about unbounded Regime C streaming require Phase F firmware
+  closure plus runtime telemetry and analog/timing measurements. HDL closure
+  alone is not sufficient evidence for those claims.
+
 ### System envelope (datasheet‑anchored capabilities)
 
 - **DAC and JESD envelope**

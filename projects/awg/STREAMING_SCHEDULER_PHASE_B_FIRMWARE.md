@@ -1,6 +1,18 @@
 # Streaming Scheduler Phase B Firmware Handoff
 
-This document freezes the firmware contract for the Phase A HDL stream-mode scheduler and scopes the Phase B firmware work. It intentionally covers firmware, DDR staging, ISR policy, and host framing. It does not require more HDL work unless the ABI below is violated.
+This document freezes the firmware contract for the Phase A HDL stream-mode scheduler and scopes the Phase B software-refill firmware work. It intentionally covers firmware, DDR staging, ISR policy, and host framing. It does not require more HDL work unless the ABI below is violated.
+
+## Current Status Note
+
+Phase E has since added HDL support for DMA-backed scheduler refill and SFP0
+10G Ethernet DMA datapaths. This Phase B document remains valid for the
+software-refill fallback path, legacy ABI rules, stream FIFO semantics, and host
+frame format. The active firmware/runtime closure handoff is now
+`PHASE_F_FIRMWARE_CLOSURE_PROMPT.md`.
+
+Phase F firmware must keep the software-refill behavior below working, but its
+primary refill path should use `axi_sched_dma` with `STREAM_CTRL.DMA_MODE` set
+before `CTRL.ARM`.
 
 ## Phase A ABI Status
 
@@ -50,6 +62,13 @@ Base address in the current KCU116 design is `0x44AA0000`.
 
 `CTRL` command bits are `RUN=bit0`, `ARM=bit1`, `STOP=bit2`, `RESET_SOFT=bit3`, and `IRQ_ENABLE=bit8`. `TIME_RELOAD_CTRL` owns time-load commands: `ARM_ON_SYSREF=bit0`, `LOAD_NOW=bit1`.
 
+`STATUS` low-byte state bits are `ARMED=bit0`, `RUNNING=bit1`, `DONE=bit2`,
+and `ERROR=bit3`. Idle is represented by no active state bit set.
+
+`STREAM_CTRL` bits are `MODE=bit0`, `OVERFLOW=bit1` W1C, `EOF_SEEN=bit2`
+read-only, and `DMA_MODE=bit3`. `MODE` and `DMA_MODE` are captured at
+`CTRL.ARM` and remain locked for the active run.
+
 ## Event Format
 
 Each event is written as seven 32-bit MMIO words followed by `EVT_WCTRL.PUSH`.
@@ -89,6 +108,12 @@ Stream mode changes only the destination of `EVT_WCTRL.PUSH`:
 5. `EVENT_COUNT` and `EVT_WADDR` remain readable/writable but are ignored by stream execution.
 
 `STREAM_CTRL.MODE` is captured at `ARM`. Changing it while armed/running does not affect the active shot. To change mode, stop or reset, then arm again.
+
+For DMA-backed stream mode, set `STREAM_CTRL.MODE | STREAM_CTRL.DMA_MODE` before
+`CTRL.ARM`. The FIFO push source is then the external scheduler DMA AXI-Stream
+port instead of `EVT_WCTRL`. DMA mode uses AXI-Stream backpressure; software
+write overflow is not expected from DMA beats. `STREAM_PUSHES` counts accepted
+stream pushes, including DMA beats.
 
 `CTRL.STOP` aborts execution but does not flush stream FIFO contents.
 
