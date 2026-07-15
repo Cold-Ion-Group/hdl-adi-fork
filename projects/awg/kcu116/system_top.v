@@ -19,14 +19,9 @@ module system_top #(
   input                   sfp0_ref_clk_n,
   input                   sfp0_rx_p,
   input                   sfp0_rx_n,
-  output      [0:0]       sfp0_tx_p,
-  output      [0:0]       sfp0_tx_n,
+  output                  sfp0_tx_p,
+  output                  sfp0_tx_n,
   output                  sfp0_tx_disable,
-  output                  sfp0_rate_select0,
-  output                  sfp0_rate_select1,
-  input                   sfp0_mod_abs,
-  input                   sfp0_rx_los,
-  input                   sfp0_tx_fault,
 
   // DDR4 Interface
   output                  ddr4_act_n,    // DDR4 activate command
@@ -145,14 +140,9 @@ module system_top #(
   // Assign DAC FIFO bypass signal
   assign dac_fifo_bypass = gpio_o[18];
 
-  // SFP0 low-speed module/status/control signals are exposed on spare GPIO bits.
-  assign gpio_i[23] = sfp0_mod_abs;
-  assign gpio_i[24] = sfp0_rx_los;
-  assign gpio_i[25] = sfp0_tx_fault;
+  // UG1239 exposes only SFP0_TX_DISABLE_B as an FPGA-connected low-speed SFP0 pin.
   assign sfp0_tx_disable = gpio_o[26];
-  assign sfp0_rate_select0 = gpio_o[27];
-  assign sfp0_rate_select1 = gpio_o[28];
-  assign gpio_i[28:26] = gpio_o[28:26];
+  assign gpio_i[28:23] = gpio_o[28:23];
 
   // Instantiate GPIO buffers for board GPIOs
   ad_iobuf #(

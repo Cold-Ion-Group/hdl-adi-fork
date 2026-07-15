@@ -112,6 +112,8 @@ tmp-clearbox
 tmpclaude-*-cwd
 tmp_*_test.tcl
 tmp_*_test/
+projects/awg/common/tb/phase_e_scheduler_regression/
+projects/awg/kcu116/phase_e_logs/
 *.bin
 .qsys_edit
 

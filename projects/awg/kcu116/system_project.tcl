@@ -1,5 +1,9 @@
 # modified by Prerna Baranwal for kcu 116, ad 9144 
 source ../../../scripts/adi_env.tcl
+if {[info exists ::env(ADI_HDL_DIR_LITERAL)]} {
+  set ad_hdl_dir $::env(ADI_HDL_DIR_LITERAL)
+  puts "Using literal ADI HDL dir: $ad_hdl_dir"
+}
 source $ad_hdl_dir/projects/scripts/adi_project_xilinx.tcl
 source $ad_hdl_dir/projects/scripts/adi_board.tcl
 source ../common/config.tcl
@@ -52,9 +56,20 @@ adi_project_files awg_kcu116 [list \
   "$ad_hdl_dir/library/common/ad_iobuf.v" \
   "$ad_hdl_dir/projects/common/kcu116/kcu116_system_constr.xdc" ]
 
+add_files -norecurse -fileset constrs_1 "sfp0_clock_constr.tcl"
+
 ## To improve timing in DDR4 MIG
 # not that relevant
 set_property strategy Performance_Retiming [get_runs impl_1]
 
+if {[info exists ::env(AWG_PHASE_E_VALIDATE_BD)] && $::env(AWG_PHASE_E_VALIDATE_BD) == 1} {
+  source phase_e_validate_bd.tcl
+  phase_e_validate_bd awg_kcu116
+}
+
 adi_project_run awg_kcu116
 
+if {[info exists ::env(AWG_PHASE_E_POST_IMPL_VERIFY)] && $::env(AWG_PHASE_E_POST_IMPL_VERIFY) == 1} {
+  source phase_e_post_impl_verify.tcl
+  phase_e_post_impl_verify awg_kcu116
+}

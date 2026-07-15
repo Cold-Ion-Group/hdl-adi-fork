@@ -261,7 +261,17 @@ proc adi_project_create {project_name mode parameter_list device {board "not-app
   make_wrapper -files [get_files $project_system_dir/system.bd] -top
 
   if {$mode == 0} {
-    import_files -force -norecurse -fileset sources_1 $project_system_dir/hdl/system_wrapper.v
+    set wrapper_file "$project_system_dir/hdl/system_wrapper.v"
+    set generated_wrapper "./$project_name.gen/sources_1/bd/system/hdl/system_wrapper.v"
+    if {![file exists $wrapper_file] && [file exists $generated_wrapper]} {
+      file mkdir [file dirname $wrapper_file]
+      file copy -force $generated_wrapper $wrapper_file
+    }
+    if {[info exists ::env(ADI_ADD_FILES_WRAPPER)] && $::env(ADI_ADD_FILES_WRAPPER) == 1} {
+      add_files -norecurse -fileset sources_1 $wrapper_file
+    } else {
+      import_files -force -norecurse -fileset sources_1 $wrapper_file
+    }
   } else {
     write_hwdef -file "$project_name.data/$project_name.hwdef"
   }
