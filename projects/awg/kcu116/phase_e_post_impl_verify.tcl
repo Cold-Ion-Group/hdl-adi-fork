@@ -49,6 +49,7 @@ proc phase_e_post_impl_verify {{project_name awg_kcu116}} {
     *axi_eth_tx_dma*
     *axi_sched_dma*
     *awg_timed_ctrl_0*
+    *awg_extension_0*
   } {
     phase_e_check_cell_present $pattern
   }
@@ -74,6 +75,7 @@ proc phase_e_post_impl_verify {{project_name awg_kcu116}} {
   report_methodology -file phase_e_logs/phase_e_methodology.rpt
   report_clock_interaction -file phase_e_logs/phase_e_clock_interaction.rpt
   report_utilization -hierarchical -file phase_e_logs/phase_e_utilization_hier.rpt
+  report_power -file phase_e_logs/phase_e_power.rpt
   check_timing -override_defaults no_clock -verbose -file phase_e_logs/phase_e_no_clock.rpt
 
   set timing_text [report_timing_summary -return_string]

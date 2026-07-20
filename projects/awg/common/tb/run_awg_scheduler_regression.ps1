@@ -27,7 +27,8 @@ $CommonSources = @(
   "library\util_cdc\sync_gray.v",
   "library\util_axis_fifo\util_axis_fifo_address_generator.v",
   "library\util_axis_fifo\util_axis_fifo.v",
-  "projects\awg\common\awg_timed_ctrl.v"
+  "projects\awg\common\awg_timed_ctrl.v",
+  "projects\awg\common\awg_extension.v"
 ) | ForEach-Object { Join-Path $RepoDir $_ }
 
 $Benches = @(
@@ -43,6 +44,8 @@ $Benches = @(
   @{ Name = "dma_backpressure_full"; File = "projects\awg\common\tb\tb_dma_backpressure_full.v";   Top = "testbench" },
   @{ Name = "dma_stop_soft_reset";   File = "projects\awg\common\tb\tb_dma_stop_soft_reset.v";     Top = "testbench" },
   @{ Name = "stream_occupancy";      File = "projects\awg\common\tb\tb_stream_occupancy_rollover.v"; Top = "testbench" }
+  @{ Name = "sideband_irq";          File = "projects\awg\common\tb\tb_sideband_irq.v";            Top = "testbench" }
+  @{ Name = "extension_c1";          File = "projects\awg\common\tb\tb_awg_extension_c1.v";        Top = "testbench" }
 )
 
 $Failures = 0

@@ -75,6 +75,7 @@ proc phase_e_validate_bd {{project_name awg_kcu116}} {
     axi_eth_tx_dma
     axi_sched_dma
     awg_timed_ctrl_0
+    awg_extension_0
     axi_ad9144_dma
   } {
     phase_e_assert_cell $cell
@@ -105,6 +106,12 @@ proc phase_e_validate_bd {{project_name awg_kcu116}} {
   phase_e_assert_param axi_sched_dma CYCLIC 0
   phase_e_assert_param axi_sched_dma ID 2
 
+  set expected_c1 1
+  if {[info exists ::env(AWG_ENABLE_C1)]} {
+    set expected_c1 $::env(AWG_ENABLE_C1)
+  }
+  phase_e_assert_param awg_extension_0 C1_IMPLEMENTED $expected_c1
+
   phase_e_assert_param axi_eth_rx_dma DMA_TYPE_SRC 1
   phase_e_assert_param axi_eth_rx_dma DMA_TYPE_DEST 0
   phase_e_assert_param axi_eth_rx_dma DMA_DATA_WIDTH_SRC 64
@@ -123,6 +130,7 @@ proc phase_e_validate_bd {{project_name awg_kcu116}} {
   phase_e_assert_addr SEG_data_axi_eth_rx_dma 0x44AC0000
   phase_e_assert_addr SEG_data_axi_eth_tx_dma 0x44AD0000
   phase_e_assert_addr SEG_data_axi_sched_dma 0x44AB0000
+  phase_e_assert_addr SEG_data_awg_extension_0 0x44AE0000
 
   phase_e_assert_net_has_pin *axi_eth_rx_dma*irq* *sys_concat_intc/In10
   phase_e_assert_net_has_pin *axi_eth_tx_dma*irq* *sys_concat_intc/In9
