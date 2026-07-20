@@ -36,6 +36,7 @@ set awg_qpll_enable [get_env_param AWG_QPLL_ENABLE 1]
 set awg_qpll_refclk_div [get_env_param AWG_QPLL_REFCLK_DIV 1]
 set awg_qpll_fbdiv [get_env_param AWG_QPLL_FBDIV 20]
 set awg_tx_out_div [get_env_param AWG_TX_OUT_DIV 1]
+set awg_enable_c1 [get_env_param AWG_ENABLE_C1 1]
 # Top level ports
 
 create_bd_port -dir I dac_fifo_bypass
@@ -279,14 +280,38 @@ ad_ip_instance awg_timed_ctrl awg_timed_ctrl_0 [list \
   DDS_PHASE_DW 32 \
 ]
 
+# A single address-stable extension block supports two build variants.
+# AWG_ENABLE_C1=0 prunes the decoder datapath while retaining discovery and
+# direct pass-through; AWG_ENABLE_C1=1 adds the runtime-selectable C1 decoder.
+ad_ip_instance awg_extension awg_extension_0 [list \
+  C1_IMPLEMENTED $awg_enable_c1 \
+]
+
 ad_connect sys_cpu_clk awg_timed_ctrl_0/s_axi_aclk
 ad_connect sys_cpu_resetn awg_timed_ctrl_0/s_axi_aresetn
+ad_connect sys_cpu_clk awg_extension_0/s_axi_aclk
+ad_connect sys_cpu_resetn awg_extension_0/s_axi_aresetn
+ad_connect awg_extension_0/extension_error awg_timed_ctrl_0/extension_error
+ad_connect awg_extension_0/extension_error_toggle awg_timed_ctrl_0/extension_error_toggle
 ad_connect util_awg_xcvr/tx_out_clk_0 awg_timed_ctrl_0/sched_clk
 ad_connect axi_ad9144_jesd_rstgen/peripheral_reset awg_timed_ctrl_0/sched_reset
 ad_connect jesd_sysref_sync/sysref_pulse awg_timed_ctrl_0/sysref_pulse
 
 create_bd_port -dir O marker_commit
 ad_connect marker_commit awg_timed_ctrl_0/marker_commit
+
+# Measurement-only coherent event bundle.  Package-pin selection belongs to
+# the verified 1.8-V FMC interposer XDC and is intentionally not guessed here.
+create_bd_port -dir O event_toggle
+create_bd_port -dir O epoch
+create_bd_port -dir O -from 15 -to 0 event_seq_gray
+create_bd_port -dir O awg_error
+create_bd_port -dir O error_toggle
+ad_connect event_toggle awg_timed_ctrl_0/event_toggle
+ad_connect epoch awg_timed_ctrl_0/epoch
+ad_connect event_seq_gray awg_timed_ctrl_0/event_seq_gray
+ad_connect awg_error awg_timed_ctrl_0/awg_error
+ad_connect error_toggle awg_timed_ctrl_0/error_toggle
 
 # marker_start and marker_done are available for scope probing but are not
 # routed to top-level pins by default.  Add create_bd_port / XDC constraints
@@ -339,9 +364,12 @@ ad_connect axi_dac_fifo/dma_xfer_last axi_ad9144_dma/m_axis_last
 
 ad_connect sys_cpu_clk axi_sched_dma/m_axis_aclk
 ad_connect sys_cpu_resetn axi_sched_dma/m_src_axi_aresetn
-ad_connect axi_sched_dma/m_axis_data awg_timed_ctrl_0/dma_s_axis_tdata
-ad_connect axi_sched_dma/m_axis_valid awg_timed_ctrl_0/dma_s_axis_tvalid
-ad_connect axi_sched_dma/m_axis_ready awg_timed_ctrl_0/dma_s_axis_tready
+ad_connect axi_sched_dma/m_axis_data awg_extension_0/s_axis_tdata
+ad_connect axi_sched_dma/m_axis_valid awg_extension_0/s_axis_tvalid
+ad_connect axi_sched_dma/m_axis_ready awg_extension_0/s_axis_tready
+ad_connect awg_extension_0/m_axis_tdata awg_timed_ctrl_0/dma_s_axis_tdata
+ad_connect awg_extension_0/m_axis_tvalid awg_timed_ctrl_0/dma_s_axis_tvalid
+ad_connect awg_extension_0/m_axis_tready awg_timed_ctrl_0/dma_s_axis_tready
 
 # 10G Ethernet MAC, RX DMA, and TX DMA.
 set eth_gt_rxp_pin [get_bd_pins -quiet eth_mac_10g/gt_rxp_in_0]
@@ -417,6 +445,7 @@ ad_cpu_interconnect 0x44A04000 axi_ad9144_tpl
 ad_cpu_interconnect 0x44A90000 axi_ad9144_jesd
 ad_cpu_interconnect 0x44AA0000 awg_timed_ctrl_0
 ad_cpu_interconnect 0x44AB0000 axi_sched_dma
+ad_cpu_interconnect 0x44AE0000 awg_extension_0
 ad_cpu_interconnect 0x44C00000 eth_mac_10g s_axi_0
 ad_cpu_interconnect 0x44AC0000 axi_eth_rx_dma
 ad_cpu_interconnect 0x44AD0000 axi_eth_tx_dma

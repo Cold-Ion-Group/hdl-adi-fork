@@ -78,6 +78,13 @@ module system_top #(
   wire    [1:0]   tx_sync;              // Single-ended transmit sync signals
   wire            tx_sysref_loc;        // Local sysref signal (device-specific)
   wire            dac_fifo_bypass;      // DAC FIFO bypass signal
+  // The measurement bundle is present at the BD boundary.  It remains
+  // internal until the production FMC interposer pinout/XDC is verified.
+  wire            event_toggle_int;
+  wire            epoch_int;
+  wire    [15:0]  event_seq_gray_int;
+  wire            awg_error_int;
+  wire            error_toggle_int;
 
 
 
@@ -231,7 +238,12 @@ module system_top #(
     .dac_fifo_bypass (dac_fifo_bypass),
 
     // Scheduler marker output
-    .marker_commit   (marker_commit)
+    .marker_commit   (marker_commit),
+    .event_toggle    (event_toggle_int),
+    .epoch           (epoch_int),
+    .event_seq_gray  (event_seq_gray_int),
+    .awg_error       (awg_error_int),
+    .error_toggle    (error_toggle_int)
   );
 
   // Assign local sysref signal based on device code

@@ -23,6 +23,7 @@ M_DEPS += ../../../library/common/ad_iobuf.v
 LIB_DEPS += axi_dmac
 LIB_DEPS += axi_sysid
 LIB_DEPS += awg_timed_ctrl
+LIB_DEPS += awg_extension
 LIB_DEPS += jesd204/ad_ip_jesd204_tpl_dac
 LIB_DEPS += jesd204/axi_jesd204_tx
 LIB_DEPS += jesd204/jesd204_tx
