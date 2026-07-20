@@ -134,6 +134,10 @@ module awg_timed_ctrl #(
   input  wire        sched_reset,
   (* X_INTERFACE_IGNORE = "true" *)
   input  wire        sysref_pulse,
+  (* X_INTERFACE_IGNORE = "true" *)
+  input  wire        extension_error,
+  (* X_INTERFACE_IGNORE = "true" *)
+  input  wire        extension_error_toggle,
   // Marker outputs (sched_clk domain, 1-cycle active-high pulses)
   (* X_INTERFACE_IGNORE = "true" *)
   output reg         marker_commit,  // pulses once per fired event
@@ -141,6 +145,18 @@ module awg_timed_ctrl #(
   output reg         marker_start,   // pulses when engine begins execution
   (* X_INTERFACE_IGNORE = "true" *)
   output reg         marker_done,    // pulses when all events complete
+  // Measurement-only sideband.  Held fields settle one sched_clk cycle
+  // before the corresponding toggle changes.
+  (* X_INTERFACE_IGNORE = "true" *)
+  output reg         event_toggle,
+  (* X_INTERFACE_IGNORE = "true" *)
+  output reg         epoch,
+  (* X_INTERFACE_IGNORE = "true" *)
+  output reg  [15:0] event_seq_gray,
+  (* X_INTERFACE_IGNORE = "true" *)
+  output reg         awg_error,
+  (* X_INTERFACE_IGNORE = "true" *)
+  output reg         error_toggle,
   (* X_INTERFACE_IGNORE = "true" *)
   output reg  [NUM_CHANNELS*16-1:0]           sched_scale_s,
   (* X_INTERFACE_IGNORE = "true" *)
@@ -385,6 +401,15 @@ module awg_timed_ctrl #(
   reg [63:0] prev_ts;            // timestamp of previous fired event (spacing check)
   reg        prev_phase_reinit;
   reg [7:0]  error_code;
+  reg [15:0] event_seq_binary;
+  reg        event_toggle_pending;
+  reg        error_toggle_pending;
+  reg        extension_error_sync1, extension_error_sync2;
+  reg        extension_error_tgl_sync1, extension_error_tgl_sync2;
+  reg        extension_error_tgl_sync2_d;
+  reg        overflow_error_tgl_axi;
+  reg        overflow_error_tgl_sync1, overflow_error_tgl_sync2;
+  reg        overflow_error_tgl_sync2_d;
   reg [5:0]  irq_sched;          // sticky IRQ bits in sched domain
   reg        compare_first;      // high on the first cycle in ENGINE_COMPARE
   reg        time_reload_arm_sched;
@@ -452,6 +477,10 @@ module awg_timed_ctrl #(
   wire [7:0]  write_addr = aw_captured ? awaddr_captured : s_axi_awaddr;
   wire [31:0] write_data = w_captured ? wdata_captured : s_axi_wdata;
   wire [3:0]  write_strb = w_captured ? wstrb_captured : s_axi_wstrb;
+  wire [5:0] irq_w1c_mask =
+    (write_issue && (write_addr == REG_IRQ_STATUS) && write_strb[0]) ?
+      write_data[5:0] : 6'h00;
+  wire status_snap_edge = status_snap_sync2 ^ status_snap_sync2_d;
   wire read_fire  = s_axi_arvalid && s_axi_arready;
   wire        stream_mode_write_sel =
     (status_shadow[0] || status_shadow[1]) ? mode_stream_locked_reg : mode_stream_cfg_reg;
@@ -536,7 +565,10 @@ module awg_timed_ctrl #(
   );
 
   // Interrupt: level-high while any enabled IRQ bit is pending
-  assign irq = |(irq_status_axi[5:0] & irq_enable_reg[5:0]);
+  // CTRL[8] is the legacy global gate.  Per-source IRQ_ENABLE remains fully
+  // compatible: either mechanism enables a pending source.
+  assign irq = |(irq_status_axi[5:0] &
+                 (irq_enable_reg[5:0] | {6{irq_en_reg}}));
 
   // ---------------------------------------------------------------------------
   // AXI-Lite register interface (s_axi_aclk domain)
@@ -564,6 +596,7 @@ module awg_timed_ctrl #(
       dma_mode_cfg_reg <= 1'b0;
       dma_mode_locked_reg <= 1'b0;
       write_overflow_sticky_reg <= 1'b0;
+      overflow_error_tgl_axi <= 1'b0;
       low_wmark_reg      <= (STREAM_DEPTH_USABLE >> 2);
       stream_pushes_reg  <= 32'h0;
       aw_captured        <= 1'b0;
@@ -708,8 +741,9 @@ module awg_timed_ctrl #(
               load_now_req_tgl    <= ~load_now_req_tgl;
           end
           REG_IRQ_STATUS: begin
-            // RW1C: writing a 1 to a bit clears it
-            if (write_strb[0]) irq_status_axi[7:0] <= irq_status_axi[7:0] & ~write_data[7:0];
+            // Updated once below together with CDC-set bits.  Keeping a
+            // single nonblocking assignment prevents a continuously changing
+            // status snapshot from accidentally overriding a W1C write.
           end
           REG_IRQ_ENABLE: begin
             if (write_strb[0]) irq_enable_reg[7:0]   <= write_data[7:0];
@@ -768,6 +802,8 @@ module awg_timed_ctrl #(
               event_wr_data_cfg <= stream_event_word;
               event_wr_req_tgl <= ~event_wr_req_tgl;
             end else if (stream_push_attempt && !stream_push_fire) begin
+              if (!write_overflow_sticky_reg)
+                overflow_error_tgl_axi <= ~overflow_error_tgl_axi;
               write_overflow_sticky_reg <= 1'b1;
             end else if (stream_push_fire) begin
               stream_pushes_reg <= stream_pushes_reg + 1'b1;
@@ -855,15 +891,19 @@ module awg_timed_ctrl #(
       status_snap_sync1   <= status_snap_tgl;
       status_snap_sync2   <= status_snap_sync1;
       status_snap_sync2_d <= status_snap_sync2;
-      if (status_snap_sync2 ^ status_snap_sync2_d) begin
+      if (status_snap_edge) begin
         status_shadow       <= status_sched_snap;
         last_exec_shadow    <= last_exec_sched_snap;
         cur_event_shadow    <= cur_event_snap;
         eof_seen_shadow     <= eof_seen_sched_snap;
         mode_stream_active_shadow <= mode_stream_sched_snap;
-        // OR in new IRQ bits (accumulate; AXI clears via RW1C write)
-        irq_status_axi      <= irq_status_axi | {28'h0, irq_snap};
       end
+
+      // Sticky pending bits: a newly arrived source wins if firmware clears it
+      // in the same cycle.  This is the sole non-reset assignment to the IRQ
+      // status register and therefore makes W1C deterministic.
+      irq_status_axi[5:0] <= (irq_status_axi[5:0] & ~irq_w1c_mask) |
+                             (status_snap_edge ? irq_snap : 6'h00);
 
       // Commit-count CDC via Gray-coded synchronizer chain.
       // This avoids lost updates when status_snap_tgl edges coalesce.
@@ -977,6 +1017,22 @@ module awg_timed_ctrl #(
       marker_commit       <= 1'b0;
       marker_start        <= 1'b0;
       marker_done         <= 1'b0;
+      event_toggle        <= 1'b0;
+      epoch               <= 1'b0;
+      event_seq_gray      <= 16'h0000;
+      event_seq_binary    <= 16'h0000;
+      event_toggle_pending <= 1'b0;
+      awg_error           <= 1'b0;
+      error_toggle        <= 1'b0;
+      error_toggle_pending <= 1'b0;
+      extension_error_sync1 <= 1'b0;
+      extension_error_sync2 <= 1'b0;
+      extension_error_tgl_sync1 <= 1'b0;
+      extension_error_tgl_sync2 <= 1'b0;
+      extension_error_tgl_sync2_d <= 1'b0;
+      overflow_error_tgl_sync1 <= 1'b0;
+      overflow_error_tgl_sync2 <= 1'b0;
+      overflow_error_tgl_sync2_d <= 1'b0;
       sched_scale_s       <= {(NUM_CHANNELS*16){1'b0}};
       sched_init_s        <= {(NUM_CHANNELS*DDS_PHASE_DW){1'b0}};
       sched_incr_s        <= {(NUM_CHANNELS*DDS_PHASE_DW){1'b0}};
@@ -998,6 +1054,30 @@ module awg_timed_ctrl #(
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
       sched_phase_reinit <= 1'b0;
+      if (event_toggle_pending) begin
+        event_toggle <= ~event_toggle;
+        event_toggle_pending <= 1'b0;
+      end
+      if (error_toggle_pending) begin
+        error_toggle <= ~error_toggle;
+        error_toggle_pending <= 1'b0;
+      end
+
+      extension_error_sync1 <= extension_error;
+      extension_error_sync2 <= extension_error_sync1;
+      extension_error_tgl_sync1 <= extension_error_toggle;
+      extension_error_tgl_sync2 <= extension_error_tgl_sync1;
+      extension_error_tgl_sync2_d <= extension_error_tgl_sync2;
+      overflow_error_tgl_sync1 <= overflow_error_tgl_axi;
+      overflow_error_tgl_sync2 <= overflow_error_tgl_sync1;
+      overflow_error_tgl_sync2_d <= overflow_error_tgl_sync2;
+      if (extension_error_sync2 ||
+          (extension_error_tgl_sync2 ^ extension_error_tgl_sync2_d) ||
+          (overflow_error_tgl_sync2 ^ overflow_error_tgl_sync2_d)) begin
+        awg_error <= 1'b1;
+        if (!awg_error)
+          error_toggle_pending <= 1'b1;
+      end
       if (!stream_hold_valid && stream_prefetch_en && stream_fifo_m_valid) begin
         stream_fetch_data <= stream_fifo_m_data;
         stream_hold_valid <= 1'b1;
@@ -1057,13 +1137,20 @@ module awg_timed_ctrl #(
 
       if (load_now_req_sync2 ^ load_now_req_sync2_d) begin
         sched_time_counter <= {time_reload_hi_s2, time_reload_lo_s2};
+        epoch <= ~epoch;
+        event_seq_binary <= 16'h0000;
+        event_seq_gray <= 16'h0000;
       end
       if (load_sysref_req_sync2 ^ load_sysref_req_sync2_d) begin
         time_reload_arm_sched <= 1'b1;
       end
-      if (time_reload_arm_sched && sysref_pulse) begin
+      if (!(load_now_req_sync2 ^ load_now_req_sync2_d) &&
+          time_reload_arm_sched && sysref_pulse) begin
         sched_time_counter <= {time_reload_hi_s2, time_reload_lo_s2};
         time_reload_arm_sched <= 1'b0;
+        epoch <= ~epoch;
+        event_seq_binary <= 16'h0000;
+        event_seq_gray <= 16'h0000;
       end
 
       // -------------------------------------------------------------------
@@ -1083,6 +1170,11 @@ module awg_timed_ctrl #(
         stream_stalls_gray_sched <= 32'h0;
         irq_sched          <= 6'h0;
         error_code         <= ERR_NONE;
+        awg_error          <= 1'b0;
+        error_toggle_pending <= 1'b0;
+        event_seq_binary   <= 16'h0000;
+        event_seq_gray     <= 16'h0000;
+        event_toggle_pending <= 1'b0;
         prev_ts            <= 64'h0;
         prev_phase_reinit  <= 1'b0;
         time_reload_arm_sched <= 1'b0;
@@ -1242,6 +1334,9 @@ module awg_timed_ctrl #(
             if (compare_first && ev_ts < sched_time_counter) begin
               // Missed deadline: timestamp was already in the past on arrival
               error_code          <= ERR_MISSED_DEADLINE;
+              awg_error           <= 1'b1;
+              if (!awg_error)
+                error_toggle_pending <= 1'b1;
               if (ev_flags[0]) begin
                 reinit_reject_sched <= reinit_reject_next;
                 reinit_reject_gray_sched <= reinit_reject_next_gray;
@@ -1263,6 +1358,9 @@ module awg_timed_ctrl #(
               if (read_ptr > 0 &&
                   (ev_ts - prev_ts) < MIN_SPACING_VAL) begin
                 error_code          <= spacing_error_code;
+                awg_error           <= 1'b1;
+                if (!awg_error)
+                  error_toggle_pending <= 1'b1;
                 if (ev_flags[0]) begin
                   reinit_reject_sched <= reinit_reject_next;
                   reinit_reject_gray_sched <= reinit_reject_next_gray;
@@ -1290,6 +1388,11 @@ module awg_timed_ctrl #(
           ENGINE_FIRE: begin
             // Apply the event: pulse marker_commit, record telemetry
             marker_commit      <= 1'b1;
+            // Sequence zero identifies the first FIRE after reset/epoch.  Do
+            // not slice a wider Gray counter: its bit 16 would corrupt bit 15.
+            event_seq_gray      <= (event_seq_binary >> 1) ^ event_seq_binary;
+            event_seq_binary    <= event_seq_binary + 1'b1;
+            event_toggle_pending <= 1'b1;
             commit_count_sched <= commit_count_next;
             commit_count_gray_sched <= commit_count_next_gray;
             if (ev_flags[0]) begin

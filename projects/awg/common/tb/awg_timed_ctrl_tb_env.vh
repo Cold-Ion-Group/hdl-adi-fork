@@ -61,12 +61,19 @@
   reg         sched_clk = 1'b0;
   reg         sched_reset = 1'b1;
   reg         sysref_pulse = 1'b0;
+  reg         extension_error_in = 1'b0;
+  reg         extension_error_toggle_in = 1'b0;
   reg [255:0] dma_s_axis_tdata = 256'h0;
   reg         dma_s_axis_tvalid = 1'b0;
   wire        dma_s_axis_tready;
   wire        marker_commit;
   wire        marker_start;
   wire        marker_done;
+  wire        event_toggle;
+  wire        epoch;
+  wire [15:0] event_seq_gray;
+  wire        awg_error;
+  wire        error_toggle;
   wire [127:0] sched_scale_s;
   wire [255:0] sched_init_s;
   wire [255:0] sched_incr_s;
@@ -109,9 +116,16 @@
     .sched_clk(sched_clk),
     .sched_reset(sched_reset),
     .sysref_pulse(sysref_pulse),
+    .extension_error(extension_error_in),
+    .extension_error_toggle(extension_error_toggle_in),
     .marker_commit(marker_commit),
     .marker_start(marker_start),
     .marker_done(marker_done),
+    .event_toggle(event_toggle),
+    .epoch(epoch),
+    .event_seq_gray(event_seq_gray),
+    .awg_error(awg_error),
+    .error_toggle(error_toggle),
     .sched_scale_s(sched_scale_s),
     .sched_init_s(sched_init_s),
     .sched_incr_s(sched_incr_s),

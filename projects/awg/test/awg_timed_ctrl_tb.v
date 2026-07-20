@@ -123,6 +123,8 @@ module awg_timed_ctrl_tb;
     .sched_clk(sched_clk),
     .sched_reset(sched_reset),
     .sysref_pulse(sysref_pulse),
+    .extension_error(1'b0),
+    .extension_error_toggle(1'b0),
     .marker_commit(marker_commit),
     .marker_start(marker_start),
     .marker_done(marker_done),
