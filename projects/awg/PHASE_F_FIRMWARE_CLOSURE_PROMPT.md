@@ -5,12 +5,18 @@ firmware/runtime closure layer on top of the already implemented Phase E HDL
 datapaths. Do not treat this as an HDL change request unless a verified HDL ABI
 defect is found.
 
+> Status note (July 2026): the Phase F source described here is now implemented
+> in `no-OS-adi-fork/projects/fmcdac`. Use its `BUILD_AND_USE.md` for current
+> build and lab instructions. Hardware closure still requires a licensed XSA
+> and board evidence. GWAS/2 in `awg_stream_proto.h` is the production wire ABI;
+> the simpler frame below is the retained GWAS/1 diagnostic format.
+
 ## Prompt for the Firmware Engineer
 
 You are joining the AWG firmware work after Phase E HDL closure. Your job is to
 close the firmware and runtime data path for scheduler DMA refill and 10G
 Ethernet streaming, using the existing HDL ABI. Do not assume undocumented
-registers, XPAR names, PG203 management offsets, DMA behavior, clock rates, or
+registers, XPAR names, XXV Ethernet management offsets, DMA behavior, clock rates, or
 buffer addresses. Verify each one from the checked-out sources, generated XSA,
 generated `xparameters.h`, or the relevant IP product guide before relying on it.
 
@@ -38,7 +44,8 @@ Firmware repo:
 Build blocker from HDL closure:
 
 - The Phase E design synthesized, implemented, and routed cleanly, but
-  bitstream/XSA generation was blocked on the installed PG203 `xxv_ethernet`
+  bitstream/XSA generation was blocked on the installed XXV Ethernet v4.0
+  (`xxv_ethernet`, documented by PG210)
   license. Full firmware/hardware closure requires a licensed bitstream and XSA.
 - Do not claim Ethernet runtime closure until a licensed XSA/bitstream is used.
 
@@ -61,7 +68,7 @@ Interrupt wiring in the KCU116 BD:
 - `axi_eth_tx_dma/irq`: `mb-9`, `ps-15`
 - Existing `axi_ad9144_jesd/irq`: `mb-15`, `ps-10`
 - Existing `axi_ad9144_dma/irq`: `mb-13`, `ps-12`
-- PG203 `eth_mac_10g` is currently polled; the selected configuration did not
+- XXV Ethernet `eth_mac_10g` is currently polled; the selected configuration did not
   expose a discrete interrupt pin in the BD.
 
 Scheduler stream ABI source of truth:
@@ -139,7 +146,7 @@ Suggested feature gates:
 
 - `FMCDAC_AWG_SCHED`: scheduler driver and legacy/stream smoke tests
 - `FMCDAC_AWG_SCHED_DMA_REFILL`: `axi_sched_dma` refill path
-- `FMCDAC_AWG_SCHED_ETH`: PG203 MAC plus Ethernet RX/TX DMA transport
+- `FMCDAC_AWG_SCHED_ETH`: XXV Ethernet MAC plus RX/TX DMA transport
 
 Required new or refactored firmware files:
 
@@ -248,7 +255,7 @@ Acceptance for F.2:
 
 Bring up `eth_mac_10g` only after F.2 is stable:
 
-- Use PG203 `xxv_ethernet` v4.0 documentation and generated IP collateral for
+- Use PG210 for `xxv_ethernet` v4.0 and the generated IP collateral for
   the exact AXI-Lite register map.
 - Do not invent MAC management offsets.
 - Configure/reset the MAC and PCS/PMA as required for 10G BASE-R SFP0.
@@ -305,7 +312,7 @@ Implement only the minimum network stack needed for the AWG stream:
 Use a transport-independent stream protocol parser. The same parser should be
 usable from UART/debug paths and Ethernet RX.
 
-Recommended frame:
+Original recommended frame (now the GWAS/1 diagnostic format):
 
 ```text
 u32 magic      // 0x53415747, "GWAS" little endian
@@ -408,7 +415,7 @@ Provide a Phase F firmware closure report with:
 ## Non-Goals for Phase F
 
 - New HDL transport features.
-- New PG203 interrupt wiring.
+- New XXV Ethernet interrupt wiring.
 - lwIP/TCP/DHCP.
 - RFSoC measurement appliance implementation.
 - Publication-grade analog/RF proof. Phase F should expose the runtime stream

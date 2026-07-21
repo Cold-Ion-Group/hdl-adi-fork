@@ -159,11 +159,12 @@ AD9516 JESD clock tree:
 
 | Signal | Frequency | Source | Destination | Notes |
 |--------|-----------|--------|-------------|-------|
-| SFP0 GT refclk | 156.25 MHz | KCU116 USER_MGT_SI570_CLOCK_C | PG203 `eth_mac_10g` GT refclk | MGTREFCLK1_226, constrained in `sfp0_system_constr.xdc` |
+| SFP0 GT refclk | 156.25 MHz | KCU116 USER_MGT_SI570_CLOCK_C | XXV Ethernet v4.0 `eth_mac_10g` GT refclk | MGTREFCLK1_226, constrained in `sfp0_system_constr.xdc` |
 
 This clock is independent of OUT1/OUT6/OUT7/OUT9. Ethernet link-up, MAC reset,
-and RX/TX user clocks are PG203-owned. Firmware should treat the MAC as a
-separate clocking island and poll PG203 link/status registers at `0x44C00000`.
+and RX/TX user clocks are owned by the XXV Ethernet subsystem. Firmware should
+treat the MAC as a separate clocking island and poll the PG210-defined
+link/status registers at `0x44C00000`.
 
 ## AD9516 Register Settings (Key)
 

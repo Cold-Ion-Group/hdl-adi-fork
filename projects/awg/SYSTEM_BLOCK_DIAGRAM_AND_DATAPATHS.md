@@ -14,9 +14,9 @@ This document describes the implemented architecture in this repository:
   - OUT6 = DAC SYSREF
   - OUT7 = FPGA SYSREF
   - OUT9 = FPGA REFCLK
-- Current Phase E HDL state: timestamped scheduler, software stream FIFO, DMA scheduler refill, SFP0 PG203 10G MAC, Ethernet RX DMA, and Ethernet TX DMA are implemented in HDL and routed timing-clean. Bitstream/XSA generation is blocked on the local PG203 license.
+- Current Phase E HDL state: timestamped scheduler, software stream FIFO, DMA scheduler refill, SFP0 XXV Ethernet v4.0 10G MAC, Ethernet RX DMA, and Ethernet TX DMA are implemented in HDL and routed timing-clean. Bitstream/XSA generation is blocked on the local XXV Ethernet license.
 - Ultimate target capability: preserve the broader 10–450 MHz / quad-channel AWG framing. This document explains the current datapath and the hooks for later phases; it does not redefine the end goal downward.
-- Open / later-phase options: Phase F firmware/runtime closure, DMA playback validation, AD9144 on-chip NCO placement, image-zone filtering, and true >491.52 MHz FPGA-generated bandwidth expansion remain distinct paths and should not be conflated with the current default DDS datapath.
+- Open / later-phase options: Phase F board/runtime closure, DMA playback validation, AD9144 on-chip NCO placement, image-zone filtering, and true >491.52 MHz FPGA-generated bandwidth expansion remain distinct paths and should not be conflated with the current default DDS datapath.
 
 --------------------------------------------------------------------------------
 
@@ -170,7 +170,7 @@ Notes:
 ```mermaid
 flowchart LR
   HOST[Host UDP sender] --> SFP[SFP0 10G link]
-  SFP --> MAC[eth_mac_10g PG203\n0x44C00000]
+  SFP --> MAC[eth_mac_10g XXV Ethernet v4.0\n0x44C00000]
   MAC --> RXDMA[axi_eth_rx_dma\nAXIS to DDR\n0x44AC0000]
   RXDMA --> RAW[DDR raw frame buffers]
   RAW --> FW[MicroBlaze Phase F firmware\nvalidate frames and event ring]
@@ -188,13 +188,15 @@ Current HDL status:
 - `axi_sched_dma` is memory-to-AXIS, 256-bit to 256-bit, non-cyclic, HP2.
 - `axi_eth_rx_dma` is AXIS-to-memory, 64-bit to 256-bit, non-cyclic, HP3.
 - `axi_eth_tx_dma` is memory-to-AXIS, 256-bit to 64-bit, non-cyclic, HP3.
-- `eth_mac_10g` is PG203 `xxv_ethernet` v4.0 on SFP0 and is AXI-Lite polled.
+- `eth_mac_10g` is XXV Ethernet v4.0 (documented by PG210) on SFP0 and is AXI-Lite polled.
 
 Current firmware/runtime status:
-- Phase F firmware is pending. The current no-OS `fmcdac` app has no scheduler
-  DMA refill or Ethernet UDP transport modules yet.
+- Phase F source is implemented in no-OS `projects/fmcdac`, including scheduler
+  DMA refill, XXV Ethernet management, RX/TX DMA, GWAS/2, and host tools.
+- Licensed-XSA builds and KCU116 runtime, rate, soak, and analog closure remain
+  pending. Source tests are not board evidence.
 - The Phase E HDL reached routed implementation with clean timing, but local
-  bitstream/XSA generation is blocked until a full PG203 license is available.
+  bitstream/XSA generation is blocked until a full XXV Ethernet license is available.
 
 --------------------------------------------------------------------------------
 
@@ -284,13 +286,14 @@ Implemented but not part of the current primary automated benchmark path:
 - Timestamped event scheduler with legacy preload, software stream mode, DMA
   stream ingress, low-watermark IRQ, empty-stall IRQ, EOF handling, and
   `marker_commit`.
-- SFP0 10G Ethernet HDL datapath with PG203 MAC plus RX/TX DMAs.
+- SFP0 10G Ethernet HDL datapath with XXV Ethernet MAC plus RX/TX DMAs.
 - Optional AD9144 on-chip NCO control for later placement experiments.
 - DMA playback or alternate-source experiments as a discriminator if DDS-band or SFDR evidence later requires them.
 
 Blocked or later-phase architectural work:
-- Phase F firmware/runtime closure for scheduler DMA refill and 10G UDP stream.
-- PG203 licensed bitstream/XSA generation on the local tool installation.
+- Phase F licensed-build and board/runtime closure for scheduler DMA refill and
+  the 10G UDP stream.
+- Licensed XXV Ethernet bitstream/XSA generation on the local tool installation.
 - True >491.52 MHz FPGA-generated bandwidth expansion via a different JESD/HDL architecture; the current driver "mode 9" does not provide that capability.
 - Hardware list and branch playback engine with deterministic branch latency.
 - Atomic staged commit unit for time-tagged FTW/POW/ASF updates.

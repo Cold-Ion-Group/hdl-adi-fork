@@ -1,5 +1,9 @@
 # FMCDAC System Overview
 
+For the supported HDL build, variants, outputs, and firmware handoff, use
+[BUILD_AND_USE.md](./BUILD_AND_USE.md). A routed design without the licensed
+XXV Ethernet v4.0 bitstream and XSA is not a full-system hardware handoff.
+
 **Platform**: AD9144-FMC-EBZ on Xilinx KCU116 (Kintex UltraScale XCKU5P)
 **DAC**: AD9144 — dual 16-bit, 1966.08 MSPS (2× interpolation), JESD204B Subclass 1
 **Processor**: MicroBlaze soft-core (100 MHz, bare-metal)
@@ -57,13 +61,13 @@ The current HDL also contains the Phase E streaming-control datapaths:
 |---|---:|---|
 | `awg_timed_ctrl_0` | `0x44AA0000` | Timestamped scheduler, legacy preload mode, software stream mode, DMA stream ingress |
 | `axi_sched_dma` | `0x44AB0000` | DDR event ring to scheduler FIFO, 256-bit MM to 256-bit AXIS |
-| `eth_mac_10g` | `0x44C00000` | PG203 `xxv_ethernet` 10G SFP0 MAC/PCS/PMA, AXI-Lite managed, polled |
+| `eth_mac_10g` | `0x44C00000` | XXV Ethernet v4.0 10G SFP0 MAC/PCS/PMA, AXI-Lite managed, polled |
 | `axi_eth_rx_dma` | `0x44AC0000` | Ethernet RX AXIS to DDR, 64-bit AXIS to 256-bit MM |
 | `axi_eth_tx_dma` | `0x44AD0000` | DDR to Ethernet TX AXIS, 256-bit MM to 64-bit AXIS |
 
-These blocks are present in the routed HDL design. Firmware and live UDP stream
-runtime validation are Phase F work. Bitstream/XSA generation is currently
-blocked on the local PG203 license; see `PHASE_E_CLOSURE_REPORT.md`.
+These blocks are present in the routed HDL design, and the Phase F no-OS source
+is implemented. Licensed-XSA build and live UDP runtime validation remain open.
+See `PHASE_E_CLOSURE_REPORT.md` and the no-OS Phase F closure report.
 
 The AD9144's receive-side XBAR remaps physical lanes {4,5,6,7} → logical {0,1,2,3}
 with polarity inversion on lane 2 to match the FMC-EBZ board routing.
@@ -154,14 +158,14 @@ main()
 - Manifest-checked builds (`gen_manifest.ps1` tracks XSA + firmware commit)
 - Host automation via `run_nco_scope_test.py` (DDS-band, SFDR, throughput, UART RTT)
 - HDL/build-closed Phase E scheduler DMA ingress and SFP0 10G Ethernet RX/TX
-  DMA datapaths, routed timing clean, pending PG203 licensed bitstream/XSA
+  DMA datapaths, routed timing clean, pending licensed XXV Ethernet bitstream/XSA
 
 **Not yet validated:**
 
 - Deterministic latency across 5+ power cycles (infrastructure built, captures pending)
 - DMA waveform playback from DDR
-- Phase F firmware for scheduler DMA refill and 10G UDP transport
-- Licensed PG203 bitstream/XSA generation for the Phase E Ethernet design
+- Phase F licensed-XSA build and live scheduler/10G runtime validation
+- Licensed XXV Ethernet bitstream/XSA generation for the Phase E design
 - Live scheduler DMA refill and Ethernet streaming runtime soak
 - JESD modes other than mode 4
 - Acceptance-grade SFDR (current baseline ~48–60 dBc, target ≥85 dBc)
@@ -172,7 +176,8 @@ main()
 
 | File | Role |
 |------|------|
-| `projects/fmcdac/src/app/fmcdac.c` | All firmware logic (setup, test, DDS, diagnostics) |
+| `projects/fmcdac/src/app/fmcdac.c` | Firmware integration, setup, tests, DDS, and diagnostics |
+| `projects/fmcdac/src/app/awg_phase_f.c` | Scheduler DMA and Ethernet Phase F integration |
 | `drivers/dac/ad9144/ad9144.c` | AD9144 driver (PLL, JESD link, NCO, SYSREF) |
 | `projects/fmcdac/src/app/parameters.h` | Base addresses, pin mappings, AD9516 output indices |
 | `projects/awg/common/awg_timed_ctrl.v` | Scheduler RTL and stream/DMA ingress ABI |
@@ -185,10 +190,9 @@ main()
 
 ## 8. Forward Plan
 
-0. **Phase F firmware closure** - use `PHASE_F_FIRMWARE_CLOSURE_PROMPT.md` to
-   implement scheduler DMA refill, PG203 MAC bring-up, Ethernet RX/TX DMA,
-   minimal ARP/UDP transport, host sender, and runtime soak. This requires a
-   licensed Phase E bitstream/XSA.
+0. **Phase F hardware/runtime closure** - use the no-OS
+   `projects/fmcdac/BUILD_AND_USE.md` procedure with a licensed Phase E XSA,
+   then record scheduler DMA, Ethernet, GWAS/2, rate, and soak evidence.
 
 1. **SFDR refinement** — improve measurement confidence; determine how much of the
    current ~48–60 dBc baseline is converter/board vs bench configuration.
@@ -411,8 +415,7 @@ enabled. Software clears bits in `IRQ_STATUS` with RW1C writes.
 
 #### Deferred items (future PRs)
 
-- **Phase F firmware:** scheduler driver, DDR event ring, scheduler DMA refill,
-  PG203 MAC bring-up, Ethernet RX/TX DMA, minimal ARP/UDP transport, host sender,
-  and runtime soak. See `PHASE_F_FIRMWARE_CLOSURE_PROMPT.md`.
+- **Phase F hardware evidence:** licensed build, scheduler/DMAC probes, live
+  GWAS/2 direct and C1 runs, rate sweep, and runtime soak.
 - **Step 6 (quality gates):** cocotb directed test (N events, spacing violation,
   missed deadline); SBY liveness on CDC handshake pairs; IP-XACT packaging.

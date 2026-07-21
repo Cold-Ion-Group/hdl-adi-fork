@@ -18,19 +18,16 @@ The proposed spec uses **datasheet‑anchored envelope limits** (AD9144 sample r
 
 ### Current HDL/firmware status (July 2026)
 
-- Phase E HDL is implemented for KCU116: scheduler DMA ingress, SFP0 PG203
-  `xxv_ethernet`, Ethernet RX DMA, and Ethernet TX DMA are present in the block
+- Phase E HDL is implemented for KCU116: scheduler DMA ingress, SFP0 XXV
+  Ethernet v4.0, Ethernet RX DMA, and Ethernet TX DMA are present in the block
   design and routed timing-clean.
-- Local bitstream/XSA generation is blocked by the installed PG203 license. The
+- Local bitstream/XSA generation is blocked by the installed XXV Ethernet license. The
   design reached routed implementation; the license failure occurs at
   `write_bitstream`.
-- Firmware Phase F is pending. The current no-OS `fmcdac` app has AD9144/JESD
-  bring-up and the existing DAC DMA example, but no scheduler DMA refill,
-  PG203 MAC management, Ethernet RX/TX DMA transport, ARP/UDP parser, or host
-  UDP sender modules yet.
-- Publication claims about unbounded Regime C streaming require Phase F firmware
-  closure plus runtime telemetry and analog/timing measurements. HDL closure
-  alone is not sufficient evidence for those claims.
+- Firmware Phase F source is implemented in no-OS `projects/fmcdac`: scheduler
+  refill, XXV Ethernet management, RX/TX DMA, ARP/UDP, GWAS/2, and host tools.
+- Licensed-XSA builds and KCU116 runtime, rate, soak, and analog/timing evidence
+  remain pending. Source and HDL closure alone do not prove Regime C.
 
 ### System envelope (datasheet‑anchored capabilities)
 
