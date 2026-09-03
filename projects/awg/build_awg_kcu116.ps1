@@ -85,15 +85,44 @@ if ($ArtifactRoot) {
 }
 
 $OriginalPath = $env:Path
-$OriginalC1 = $env:AWG_ENABLE_C1
-$HadOriginalC1 = Test-Path Env:AWG_ENABLE_C1
+$PinnedBuildEnvironment = [ordered]@{
+  AWG_ENABLE_C1 = $(if ($Variant -eq "C1") { "1" } else { "0" })
+  ADI_DAC_DEVICE = "AD9144"
+  ADI_DAC_MODE = "04"
+  ADI_NUM_LINKS = "1"
+  AWG_TX_REFCLK_MHZ = "122.88"
+  AWG_QPLL_ENABLE = "1"
+  AWG_QPLL_REFCLK_DIV = "1"
+  AWG_QPLL_FBDIV = "40"
+  AWG_TX_OUT_DIV = "1"
+}
+$OriginalBuildEnvironment = @{}
+foreach ($Name in $PinnedBuildEnvironment.Keys) {
+  $EnvPath = "Env:{0}" -f $Name
+  $Present = Test-Path -LiteralPath $EnvPath
+  $OriginalBuildEnvironment[$Name] = [ordered]@{
+    present = $Present
+    value = $(if ($Present) { (Get-Item -LiteralPath $EnvPath).Value } else { $null })
+  }
+}
 
 try {
   $VivadoBin = Split-Path -Parent $VivadoBat
   $env:Path = "$VivadoBin;$OriginalPath"
-  $env:AWG_ENABLE_C1 = if ($Variant -eq "C1") { "1" } else { "0" }
+  foreach ($Name in $PinnedBuildEnvironment.Keys) {
+    Set-Item -LiteralPath ("Env:{0}" -f $Name) `
+      -Value $PinnedBuildEnvironment[$Name]
+  }
 
-  Write-Host "AWG KCU116 variant: $Variant (AWG_ENABLE_C1=$env:AWG_ENABLE_C1)"
+  $PinnedDescription = ("AWG KCU116 variant: {0}; pinned active build: " +
+    "AWG_ENABLE_C1={1}, ADI_DAC_DEVICE={2}, ADI_DAC_MODE={3}, " +
+    "ADI_NUM_LINKS={4}, AWG_TX_REFCLK_MHZ={5}, QPLL={6}/{7}/{8}, " +
+    "AWG_TX_OUT_DIV={9}") -f $Variant, $env:AWG_ENABLE_C1,
+    $env:ADI_DAC_DEVICE, $env:ADI_DAC_MODE, $env:ADI_NUM_LINKS,
+    $env:AWG_TX_REFCLK_MHZ, $env:AWG_QPLL_ENABLE,
+    $env:AWG_QPLL_REFCLK_DIV, $env:AWG_QPLL_FBDIV,
+    $env:AWG_TX_OUT_DIV
+  Write-Host $PinnedDescription
   Write-Host "Packaging required ADI HDL libraries..."
 
   Push-Location $HdlDir
@@ -168,9 +197,13 @@ try {
   }
 } finally {
   $env:Path = $OriginalPath
-  if ($HadOriginalC1) {
-    $env:AWG_ENABLE_C1 = $OriginalC1
-  } else {
-    Remove-Item Env:AWG_ENABLE_C1 -ErrorAction SilentlyContinue
+  foreach ($Name in $PinnedBuildEnvironment.Keys) {
+    $EnvPath = "Env:{0}" -f $Name
+    if ($OriginalBuildEnvironment[$Name].present) {
+      Set-Item -LiteralPath $EnvPath `
+        -Value $OriginalBuildEnvironment[$Name].value
+    } else {
+      Remove-Item -LiteralPath $EnvPath -ErrorAction SilentlyContinue
+    }
   }
 }
