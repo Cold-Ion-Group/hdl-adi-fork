@@ -6,6 +6,17 @@ module testbench;
   localparam VCD_FILE = "tb_stream_low_watermark.vcd";
 `include "awg_timed_ctrl_tb_env.vh"
 
+  reg output_opened = 1'b0;
+
+  always @(posedge sched_clk) begin
+    if (!sched_reset) begin
+      if (sched_output_valid[0])
+        output_opened <= 1'b1;
+      else if (output_opened)
+        test_fail("low-watermark warning transiently blanked valid output");
+    end
+  end
+
   initial begin
     integer i;
     reset_dut();
@@ -21,6 +32,7 @@ module testbench;
     run_scheduler();
 
     wait_for_done();
+    expect_eq1("low watermark does not close output gate", sched_output_valid[0], 1'b1);
     axi_read(REG_IRQ_STATUS, read_data);
     expect_eq1("low watermark IRQ asserted", read_data[4], 1'b1);
     axi_write(REG_IRQ_STATUS, 32'h00000010, 4'b0001);

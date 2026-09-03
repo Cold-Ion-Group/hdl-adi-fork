@@ -56,6 +56,8 @@ ad_ip_files ad_ip_jesd204_tpl_dac [list \
   ad_ip_jesd204_tpl_dac.v \
   ad_ip_jesd204_tpl_dac_channel.v \
   ad_ip_jesd204_tpl_dac_core.v \
+  ad_ip_jesd204_tpl_dac_output_gate.v \
+  ad_ip_jesd204_tpl_dac_sched_mux.v \
   ad_ip_jesd204_tpl_dac_framer.v \
   ad_ip_jesd204_tpl_dac_pn.v \
   ad_ip_jesd204_tpl_dac_regmap.v \
@@ -195,6 +197,17 @@ set group "Datapath Configuration"
 
 ad_ip_parameter DATAPATH_DISABLE boolean 0 true [list \
   DISPLAY_NAME "Disable Datapath" \
+  GROUP $group \
+]
+
+ad_ip_parameter SCHEDULER_CONTROL_ENABLE boolean 0 true [list \
+  DISPLAY_NAME "Enable scheduler ownership and final sample gate" \
+  GROUP $group \
+]
+
+ad_ip_parameter SCHEDULER_UNMUTE_DELAY INTEGER 0 true [list \
+  DISPLAY_NAME "Scheduler first-sample unmute delay" \
+  ALLOWED_RANGES {0:64} \
   GROUP $group \
 ]
 

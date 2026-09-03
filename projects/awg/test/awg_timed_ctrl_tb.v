@@ -58,6 +58,7 @@ module awg_timed_ctrl_tb;
   wire [255:0] sched_incr_s;
   wire [7:0]  sched_apply_s;
   wire        sched_phase_reinit;
+  wire [7:0]  sched_output_valid;
   wire        irq;
 
   integer failures = 0;
@@ -133,6 +134,7 @@ module awg_timed_ctrl_tb;
     .sched_incr_s(sched_incr_s),
     .sched_apply_s(sched_apply_s),
     .sched_phase_reinit(sched_phase_reinit),
+    .sched_output_valid(sched_output_valid),
     .irq(irq)
   );
 

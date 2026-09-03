@@ -167,6 +167,15 @@ module awg_timed_ctrl #(
   output reg  [NUM_CHANNELS-1:0]              sched_apply_s,
   (* X_INTERFACE_IGNORE = "true" *)
   output reg                                  sched_phase_reinit,
+  // Final TPL sample gate.  This signal shares sched_clk/link_clk and is low
+  // through reset, pre-FIRE, STOP, and every fatal error.  DONE deliberately
+  // retains the value established by the final successful FIRE.  Once a
+  // synchronized STOP/fatal condition is evaluated, validity falls on that
+  // clock edge and the pre-framer gate mutes combinationally: no later than
+  // the next link-clock sample boundary.  Input CDC and JESD/DAC pipeline
+  // latency are accounted separately from this digital-gate bound.
+  (* X_INTERFACE_IGNORE = "true" *)
+  output reg  [NUM_CHANNELS-1:0]              sched_output_valid,
   // Interrupt (s_axi_aclk domain, level-high while pending & enabled)
   (* X_INTERFACE_INFO = "xilinx.com:signal:interrupt:1.0 irq INTERRUPT" *)
   (* X_INTERFACE_PARAMETER = "SENSITIVITY LEVEL_HIGH" *)
@@ -251,6 +260,8 @@ module awg_timed_ctrl #(
   localparam [7:0] ERR_MISSED_DEADLINE   = 8'h01;
   localparam [7:0] ERR_SPACING_VIOLATION = 8'h02;
   localparam [7:0] ERR_REINIT_SPACING    = 8'h03;
+  localparam [7:0] ERR_EXTENSION_FAULT   = 8'h04;
+  localparam [7:0] ERR_STREAM_OVERFLOW   = 8'h05;
 
   // Minimum spacing as a 64-bit constant for safe comparison
   localparam [63:0] MIN_SPACING_VAL = MIN_SPACING_TICKS;
@@ -317,6 +328,7 @@ module awg_timed_ctrl #(
   reg load_sysref_req_tgl, load_now_req_tgl;
   reg stream_flush_req_tgl;
   reg event_wr_req_tgl;
+  reg terminal_ack_tgl = 1'b0;
   // Data transferred alongside event_wr_req_tgl
   reg [EVENT_MEM_ADDR_WIDTH-1:0] event_wr_addr_cfg;
   reg [255:0]                    event_wr_data_cfg;
@@ -326,6 +338,7 @@ module awg_timed_ctrl #(
   // ---------------------------------------------------------------------------
   reg status_snap_tgl;    // toggled when engine state/counters change
   reg event_wr_ack_tgl;   // toggled when each event write completes
+  reg terminal_req_tgl = 1'b0; // one transaction on entry to DONE or ERROR
 
   // Snapshot data (written in sched_clk, read in s_axi_aclk after toggle edge)
   reg [31:0] status_sched_snap;
@@ -334,6 +347,29 @@ module awg_timed_ctrl #(
   reg [5:0]  irq_snap;
   reg        eof_seen_sched_snap;
   reg        mode_stream_sched_snap;
+
+  // Lossless terminal mailbox payload.  The scheduler writes these fields
+  // before toggling terminal_req_tgl and does not touch them again until the
+  // acknowledgement has returned from the AXI domain.  Neither a software
+  // reset nor the independently generated JESD/scheduler reset clears the
+  // hold, request, or pending slot.  This preserves an unacknowledged terminal
+  // event across link resets.  The AXI reset likewise preserves its handshake
+  // phase and request synchronizer while clearing the software-visible shadow;
+  // a request which arrived during reset is captured after reset releases.
+  // FPGA configuration initializes both mailbox endpoints to zero.
+  reg [31:0] terminal_status_sched = 32'h0;
+  reg [63:0] terminal_last_exec_sched = 64'h0;
+  reg [31:0] terminal_cur_event_sched = 32'h0;
+  reg [5:0]  terminal_irq_sched = 6'h0;
+  reg        terminal_eof_sched = 1'b0;
+  reg        terminal_mode_stream_sched = 1'b0;
+  reg        terminal_pending_sched = 1'b0;
+  reg [31:0] terminal_pending_status_sched = 32'h0;
+  reg [63:0] terminal_pending_last_exec_sched = 64'h0;
+  reg [31:0] terminal_pending_cur_event_sched = 32'h0;
+  reg [5:0]  terminal_pending_irq_sched = 6'h0;
+  reg        terminal_pending_eof_sched = 1'b0;
+  reg        terminal_pending_mode_stream_sched = 1'b0;
 
   // ---------------------------------------------------------------------------
   // AXI-domain CDC sync chains
@@ -344,6 +380,8 @@ module awg_timed_ctrl #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg event_wr_ack_sync1,  event_wr_ack_sync2;
   reg event_wr_ack_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg terminal_req_sync1 = 1'b0, terminal_req_sync2 = 1'b0;
 
   // ---------------------------------------------------------------------------
   // Sched-domain CDC sync chains
@@ -372,6 +410,8 @@ module awg_timed_ctrl #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg event_wr_req_sync1, event_wr_req_sync2;
   reg event_wr_req_sync2_d;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
+  reg terminal_ack_sync1, terminal_ack_sync2;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
   reg [31:0] time_reload_lo_s1, time_reload_lo_s2;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
@@ -481,6 +521,7 @@ module awg_timed_ctrl #(
     (write_issue && (write_addr == REG_IRQ_STATUS) && write_strb[0]) ?
       write_data[5:0] : 6'h00;
   wire status_snap_edge = status_snap_sync2 ^ status_snap_sync2_d;
+  wire terminal_capture_axi = terminal_req_sync2 ^ terminal_ack_tgl;
   wire read_fire  = s_axi_arvalid && s_axi_arready;
   wire        stream_mode_write_sel =
     (status_shadow[0] || status_shadow[1]) ? mode_stream_locked_reg : mode_stream_cfg_reg;
@@ -518,6 +559,14 @@ module awg_timed_ctrl #(
   wire [7:0]   spacing_error_code = reinit_spacing_violation ? 8'h03 : 8'h02;
   wire         arm_edge = arm_req_sync2 ^ arm_req_sync2_d;
   wire         run_edge = run_req_sync2 ^ run_req_sync2_d;
+  wire         stop_edge = stop_req_sync2 ^ stop_req_sync2_d;
+  wire         sreset_edge = sreset_req_sync2 ^ sreset_req_sync2_d;
+  wire         extension_error_event = extension_error_sync2 ||
+                                       (extension_error_tgl_sync2 ^ extension_error_tgl_sync2_d);
+  wire         overflow_error_event =
+                                       (overflow_error_tgl_sync2 ^ overflow_error_tgl_sync2_d);
+  wire         terminal_mailbox_idle = terminal_req_tgl == terminal_ack_sync2;
+  wire         terminal_launch_sched = terminal_pending_sched && terminal_mailbox_idle;
 
   // Gray-to-binary conversion for AXI-domain COMMIT_COUNT CDC decode.
   // COMMIT_COUNT increments in sched_clk domain; its Gray-coded image crosses
@@ -533,6 +582,29 @@ module awg_timed_ctrl #(
         gray2bin32[i] = gray2bin32[i+1] ^ g[i];
     end
   endfunction
+
+  // Queue one terminal-state entry independently of the in-flight mailbox.
+  // This lets a blind STOP/re-arm sequence proceed without overwriting an
+  // unacknowledged payload; the queued entry launches when the mailbox is idle.
+  task automatic queue_terminal;
+    input [31:0] terminal_status;
+    input [63:0] terminal_last_exec;
+    input [31:0] terminal_cur_event;
+    input [5:0]  terminal_irq;
+    input        terminal_eof;
+    input        terminal_mode_stream;
+    begin
+      if (!terminal_pending_sched || terminal_launch_sched) begin
+        terminal_pending_status_sched      <= terminal_status;
+        terminal_pending_last_exec_sched   <= terminal_last_exec;
+        terminal_pending_cur_event_sched   <= terminal_cur_event;
+        terminal_pending_irq_sched         <= terminal_irq;
+        terminal_pending_eof_sched         <= terminal_eof;
+        terminal_pending_mode_stream_sched <= terminal_mode_stream;
+        terminal_pending_sched             <= 1'b1;
+      end
+    end
+  endtask
 
   util_axis_fifo #(
     .DATA_WIDTH(256),
@@ -647,6 +719,9 @@ module awg_timed_ctrl #(
       event_wr_ack_sync1 <= 1'b0;
       event_wr_ack_sync2 <= 1'b0;
       event_wr_ack_sync2_d <= 1'b0;
+      // Preserve terminal_ack_tgl and the request synchronizer across this
+      // independently asserted AXI reset.  This prevents phase mismatch and
+      // lets a request arriving during reset complete after release.
       time_now_lo_s1     <= 32'h0;
       time_now_lo_s2     <= 32'h0;
       time_now_hi_s1     <= 32'h0;
@@ -899,11 +974,26 @@ module awg_timed_ctrl #(
         mode_stream_active_shadow <= mode_stream_sched_snap;
       end
 
+      // Terminal state uses a bundled-data request/acknowledge mailbox rather
+      // than the best-effort status toggle.  The source payload has already
+      // been stable for the synchronizer latency when it is captured here.
+      terminal_req_sync1 <= terminal_req_tgl;
+      terminal_req_sync2 <= terminal_req_sync1;
+      if (terminal_capture_axi) begin
+        status_shadow       <= terminal_status_sched;
+        last_exec_shadow    <= terminal_last_exec_sched;
+        cur_event_shadow    <= terminal_cur_event_sched;
+        eof_seen_shadow     <= terminal_eof_sched;
+        mode_stream_active_shadow <= terminal_mode_stream_sched;
+        terminal_ack_tgl    <= terminal_req_sync2;
+      end
+
       // Sticky pending bits: a newly arrived source wins if firmware clears it
       // in the same cycle.  This is the sole non-reset assignment to the IRQ
       // status register and therefore makes W1C deterministic.
       irq_status_axi[5:0] <= (irq_status_axi[5:0] & ~irq_w1c_mask) |
-                             (status_snap_edge ? irq_snap : 6'h00);
+                             (status_snap_edge ? irq_snap : 6'h00) |
+                             (terminal_capture_axi ? terminal_irq_sched : 6'h00);
 
       // Commit-count CDC via Gray-coded synchronizer chain.
       // This avoids lost updates when status_snap_tgl edges coalesce.
@@ -976,6 +1066,8 @@ module awg_timed_ctrl #(
       event_wr_req_sync1   <= 1'b0;
       event_wr_req_sync2   <= 1'b0;
       event_wr_req_sync2_d <= 1'b0;
+      terminal_ack_sync1   <= 1'b0;
+      terminal_ack_sync2   <= 1'b0;
       time_reload_lo_s1 <= 32'h0;
       time_reload_lo_s2 <= 32'h0;
       time_reload_hi_s1 <= 32'h0;
@@ -1038,12 +1130,16 @@ module awg_timed_ctrl #(
       sched_incr_s        <= {(NUM_CHANNELS*DDS_PHASE_DW){1'b0}};
       sched_apply_s       <= {NUM_CHANNELS{1'b0}};
       sched_phase_reinit  <= 1'b0;
+      sched_output_valid  <= {NUM_CHANNELS{1'b0}};
       status_sched_snap   <= 32'h0;
       last_exec_sched_snap <= 64'h0;
       cur_event_snap      <= 32'h0;
       irq_snap            <= 6'h0;
       eof_seen_sched_snap <= 1'b0;
       mode_stream_sched_snap <= 1'b0;
+      // The local scheduler/JESD reset is independent of s_axi_aresetn.
+      // Preserve the terminal mailbox state so that reset cannot tear an
+      // in-flight bundled-data transaction or silently drop a pending entry.
     end else begin
       sched_time_counter <= sched_time_counter + 1'b1;
       if (stream_fifo_m_reset_hold != 2'b00)
@@ -1054,6 +1150,23 @@ module awg_timed_ctrl #(
       marker_start  <= 1'b0;
       marker_done   <= 1'b0;
       sched_phase_reinit <= 1'b0;
+      if (terminal_launch_sched) begin
+        terminal_status_sched      <= terminal_pending_status_sched;
+        terminal_last_exec_sched   <= terminal_pending_last_exec_sched;
+        terminal_cur_event_sched   <= terminal_pending_cur_event_sched;
+        terminal_irq_sched         <= terminal_pending_irq_sched;
+        terminal_eof_sched         <= terminal_pending_eof_sched;
+        terminal_mode_stream_sched <= terminal_pending_mode_stream_sched;
+        terminal_req_tgl           <= ~terminal_req_tgl;
+        terminal_pending_sched     <= 1'b0;
+        // The AXI-domain IRQ register owns stickiness after this transaction.
+        // Clear terminal-class source bits so a later polling snapshot cannot
+        // replay an IRQ which firmware has already cleared with W1C.
+        irq_sched[IRQ_DONE]              <= 1'b0;
+        irq_sched[IRQ_ERROR]             <= 1'b0;
+        irq_sched[IRQ_SPACING_VIOLATION] <= 1'b0;
+        irq_sched[IRQ_UNDERRUN]          <= 1'b0;
+      end
       if (event_toggle_pending) begin
         event_toggle <= ~event_toggle;
         event_toggle_pending <= 1'b0;
@@ -1115,6 +1228,9 @@ module awg_timed_ctrl #(
       event_wr_req_sync2   <= event_wr_req_sync1;
       event_wr_req_sync2_d <= event_wr_req_sync2;
 
+      terminal_ack_sync1 <= terminal_ack_tgl;
+      terminal_ack_sync2 <= terminal_ack_sync1;
+
       time_reload_lo_s1 <= time_reload_lo_reg;
       time_reload_lo_s2 <= time_reload_lo_s1;
       time_reload_hi_s1 <= time_reload_hi_reg;
@@ -1154,10 +1270,14 @@ module awg_timed_ctrl #(
       end
 
       // -------------------------------------------------------------------
-      // Command edge detection (priority: sreset > stop > arm/run > engine)
+      // Command/error handling priority: soft reset > fatal sideband > STOP >
+      // arm/run > engine.  Fatal errors therefore cannot be hidden by a STOP
+      // arriving in the same scheduler cycle.
       // -------------------------------------------------------------------
-      if (sreset_req_sync2 ^ sreset_req_sync2_d) begin
-        // Soft reset: clear engine and all counters
+      if (sreset_edge) begin
+        // Soft reset clears the engine and counters but deliberately leaves
+        // terminal_pending_sched and the in-flight terminal hold untouched.
+        // Thus reset sequencing cannot overwrite an unacknowledged payload.
         engine_state       <= ENGINE_IDLE;
         read_ptr           <= 32'h0;
         commit_count_sched <= 32'h0;
@@ -1183,6 +1303,7 @@ module awg_timed_ctrl #(
         eof_seen_sched     <= 1'b0;
         stream_hold_valid  <= 1'b0;
         sched_apply_s      <= {NUM_CHANNELS{1'b0}};
+        sched_output_valid <= {NUM_CHANNELS{1'b0}};
         stream_fifo_m_reset_hold <= 2'b11;
         stream_fetch_data  <= 256'h0;
         // Send cleared status snapshot to AXI domain
@@ -1194,18 +1315,42 @@ module awg_timed_ctrl #(
         mode_stream_sched_snap <= mode_stream_sched;
         status_snap_tgl     <= ~status_snap_tgl;
 
-      end else if (stop_req_sync2 ^ stop_req_sync2_d) begin
+      end else if ((extension_error_event || overflow_error_event) &&
+                   (engine_state != ENGINE_ERROR)) begin
+        // Decoder and refused-write overflow faults are fatal Release-A
+        // sources.  They enter the same held ERROR state and mailbox path as
+        // scheduler timing faults, with distinct compatible error codes.
+        error_code          <= extension_error_event ?
+                               ERR_EXTENSION_FAULT : ERR_STREAM_OVERFLOW;
+        awg_error           <= 1'b1;
+        if (!awg_error)
+          error_toggle_pending <= 1'b1;
+        irq_sched[IRQ_ERROR] <= 1'b1;
+        engine_state        <= ENGINE_ERROR;
+        sched_apply_s       <= {NUM_CHANNELS{1'b0}};
+        sched_output_valid  <= {NUM_CHANNELS{1'b0}};
+        queue_terminal({16'h0,
+                        extension_error_event ? ERR_EXTENSION_FAULT : ERR_STREAM_OVERFLOW,
+                        4'h0, 4'b1000},
+                       last_exec_sched,
+                       read_ptr,
+                       irq_sched | (6'b1 << IRQ_ERROR),
+                       eof_seen_sched,
+                       mode_stream_sched);
+
+      end else if (stop_edge) begin
         // Stop: abort execution, return to IDLE (does not clear counters)
         engine_state        <= ENGINE_IDLE;
         stream_empty_waiting <= 1'b0;
         stream_below_wmark_sched <= 1'b0;
         status_sched_snap   <= 32'h0;
         cur_event_snap      <= read_ptr;
-        irq_snap            <= irq_sched;
+        irq_snap            <= 6'h0;
         last_exec_sched_snap <= last_exec_sched;
         eof_seen_sched_snap <= eof_seen_sched;
         mode_stream_sched_snap <= mode_stream_sched;
         sched_apply_s       <= {NUM_CHANNELS{1'b0}};
+        sched_output_valid  <= {NUM_CHANNELS{1'b0}};
         status_snap_tgl     <= ~status_snap_tgl;
 
       end else begin
@@ -1219,6 +1364,7 @@ module awg_timed_ctrl #(
             event_count_sched <= event_count_s2;
             mode_stream_sched <= mode_stream_cfg_s2;
             sched_apply_s     <= {NUM_CHANNELS{1'b0}};
+            sched_output_valid <= {NUM_CHANNELS{1'b0}};
             if (mode_stream_cfg_s2 || (event_count_s2 > 0)) begin
               read_ptr       <= 32'h0;
               prev_ts        <= 64'h0;
@@ -1228,9 +1374,9 @@ module awg_timed_ctrl #(
               engine_state   <= ENGINE_WAIT_FETCH;
               marker_start   <= 1'b1;
               // Snapshot: running=1
-              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
+              status_sched_snap   <= {16'h0, ERR_NONE, 4'h0, 4'b0010};
               cur_event_snap      <= 32'h0;
-              irq_snap            <= irq_sched;
+              irq_snap            <= 6'h0;
               last_exec_sched_snap <= last_exec_sched;
               eof_seen_sched_snap <= eof_seen_sched;
               mode_stream_sched_snap <= mode_stream_cfg_s2;
@@ -1238,9 +1384,9 @@ module awg_timed_ctrl #(
             end else begin
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
-              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
+              status_sched_snap   <= {16'h0, ERR_NONE, 4'h0, 4'b0001};
               cur_event_snap      <= 32'h0;
-              irq_snap            <= irq_sched;
+              irq_snap            <= 6'h0;
               last_exec_sched_snap <= last_exec_sched;
               eof_seen_sched_snap <= eof_seen_sched;
               mode_stream_sched_snap <= mode_stream_cfg_s2;
@@ -1253,11 +1399,12 @@ module awg_timed_ctrl #(
               event_count_sched <= event_count_s2;
               mode_stream_sched <= mode_stream_cfg_s2;
               sched_apply_s     <= {NUM_CHANNELS{1'b0}};
+              sched_output_valid <= {NUM_CHANNELS{1'b0}};
               engine_state      <= ENGINE_ARMED;
               // Snapshot: armed=1
-              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b0, 1'b1};
+              status_sched_snap   <= {16'h0, ERR_NONE, 4'h0, 4'b0001};
               cur_event_snap      <= 32'h0;
-              irq_snap            <= irq_sched;
+              irq_snap            <= 6'h0;
               last_exec_sched_snap <= last_exec_sched;
               eof_seen_sched_snap <= eof_seen_sched;
               mode_stream_sched_snap <= mode_stream_cfg_s2;
@@ -1279,9 +1426,9 @@ module awg_timed_ctrl #(
               engine_state   <= ENGINE_WAIT_FETCH;
               marker_start   <= 1'b1;
               // Snapshot: running=1
-              status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
+              status_sched_snap   <= {16'h0, ERR_NONE, 4'h0, 4'b0010};
               cur_event_snap      <= 32'h0;
-              irq_snap            <= irq_sched;
+              irq_snap            <= 6'h0;
               last_exec_sched_snap <= last_exec_sched;
               eof_seen_sched_snap <= eof_seen_sched;
               mode_stream_sched_snap <= mode_stream_sched;
@@ -1310,7 +1457,7 @@ module awg_timed_ctrl #(
                 if (!stream_empty_waiting) begin
                   stream_empty_waiting <= 1'b1;
                   irq_sched[IRQ_EMPTY_STALL] <= 1'b1;
-                  status_sched_snap   <= {16'h0, ERR_NONE, 12'h0, 1'b0, 1'b0, 1'b1, 1'b0};
+                  status_sched_snap   <= {16'h0, ERR_NONE, 4'h0, 4'b0010};
                   cur_event_snap      <= read_ptr;
                   irq_snap            <= irq_sched | (6'b1 << IRQ_EMPTY_STALL);
                   last_exec_sched_snap <= last_exec_sched;
@@ -1344,14 +1491,15 @@ module awg_timed_ctrl #(
               irq_sched[IRQ_ERROR]  <= 1'b1;
               irq_sched[IRQ_UNDERRUN] <= 1'b1;
               engine_state        <= ENGINE_ERROR;
-              status_sched_snap   <= {16'h0, ERR_MISSED_DEADLINE, 12'h0,
-                                      1'b1, 1'b0, 1'b0, 1'b0};
-              cur_event_snap      <= read_ptr;
-              irq_snap            <= irq_sched | ((6'b1 << IRQ_UNDERRUN) | (6'b1 << IRQ_ERROR));
-              last_exec_sched_snap <= last_exec_sched;
-              eof_seen_sched_snap <= eof_seen_sched;
-              mode_stream_sched_snap <= mode_stream_sched;
-              status_snap_tgl     <= ~status_snap_tgl;
+              sched_apply_s       <= {NUM_CHANNELS{1'b0}};
+              sched_output_valid  <= {NUM_CHANNELS{1'b0}};
+              queue_terminal({16'h0, ERR_MISSED_DEADLINE, 4'h0, 4'b1000},
+                             last_exec_sched,
+                             read_ptr,
+                             irq_sched | ((6'b1 << IRQ_UNDERRUN) |
+                                          (6'b1 << IRQ_ERROR)),
+                             eof_seen_sched,
+                             mode_stream_sched);
 
             end else if (ev_ts <= sched_time_counter) begin
               // Timestamp reached: check spacing before firing
@@ -1368,16 +1516,15 @@ module awg_timed_ctrl #(
                 irq_sched[IRQ_ERROR]             <= 1'b1;
                 irq_sched[IRQ_SPACING_VIOLATION] <= 1'b1;
                 engine_state        <= ENGINE_ERROR;
-                status_sched_snap   <= {16'h0,
-                                        spacing_error_code,
-                                        12'h0,
-                                        1'b1, 1'b0, 1'b0, 1'b0};
-                cur_event_snap      <= read_ptr;
-                irq_snap            <= irq_sched | ((6'b1 << IRQ_SPACING_VIOLATION) | (6'b1 << IRQ_ERROR));
-                last_exec_sched_snap <= last_exec_sched;
-                eof_seen_sched_snap <= eof_seen_sched;
-                mode_stream_sched_snap <= mode_stream_sched;
-                status_snap_tgl     <= ~status_snap_tgl;
+                sched_apply_s       <= {NUM_CHANNELS{1'b0}};
+                sched_output_valid  <= {NUM_CHANNELS{1'b0}};
+                queue_terminal({16'h0, spacing_error_code, 4'h0, 4'b1000},
+                               last_exec_sched,
+                               read_ptr,
+                               irq_sched | ((6'b1 << IRQ_SPACING_VIOLATION) |
+                                            (6'b1 << IRQ_ERROR)),
+                               eof_seen_sched,
+                               mode_stream_sched);
               end else begin
                 engine_state <= ENGINE_FIRE;
               end
@@ -1405,15 +1552,15 @@ module awg_timed_ctrl #(
               sched_init_s[DDS_PHASE_DW*ev_ch +: DDS_PHASE_DW] <= ev_payload[16 +: DDS_PHASE_DW];
               sched_incr_s[DDS_PHASE_DW*ev_ch +: DDS_PHASE_DW] <= ev_payload[16 + DDS_PHASE_DW +: DDS_PHASE_DW];
               sched_apply_s[ev_ch] <= 1'b1;
+              sched_output_valid[ev_ch] <= 1'b1;
             end
             last_exec_sched    <= ev_ts;
             prev_ts            <= ev_ts;
             prev_phase_reinit  <= ev_flags[0];
             // Snapshot every FIRE so firmware polling sees progress before DONE.
-            status_sched_snap    <= {16'h0, ERR_NONE, 12'h0,
-                                     1'b0, 1'b0, 1'b1, 1'b0};
+            status_sched_snap    <= {16'h0, ERR_NONE, 4'h0, 4'b0010};
             cur_event_snap       <= cur_event_next;
-            irq_snap             <= irq_sched;
+            irq_snap             <= 6'h0;
             last_exec_sched_snap <= ev_ts;
             eof_seen_sched_snap  <= eof_seen_sched;
             mode_stream_sched_snap <= mode_stream_sched;
@@ -1435,14 +1582,12 @@ module awg_timed_ctrl #(
                 eof_seen_sched <= 1'b1;
                 engine_state        <= ENGINE_DONE;
                 marker_done         <= 1'b1;
-                status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
-                                        1'b0, 1'b1, 1'b0, 1'b0};
-                cur_event_snap      <= cur_event_next;
-                irq_snap            <= irq_sched | (6'b1 << IRQ_DONE);
-                last_exec_sched_snap <= last_exec_sched;
-                eof_seen_sched_snap <= 1'b1;
-                mode_stream_sched_snap <= mode_stream_sched;
-                status_snap_tgl     <= ~status_snap_tgl;
+                queue_terminal({16'h0, ERR_NONE, 4'h0, 4'b0100},
+                               last_exec_sched,
+                               cur_event_next,
+                               irq_sched | (6'b1 << IRQ_DONE),
+                               1'b1,
+                               mode_stream_sched);
               end else begin
                 read_ptr     <= read_ptr + 1'b1;
                 engine_state <= ENGINE_WAIT_FETCH;
@@ -1456,14 +1601,12 @@ module awg_timed_ctrl #(
                 // Final snapshot: done=1.
                 // commit_count_sched already carries the post-FIRE increment;
                 // last_exec_sched was updated to ev_ts in ENGINE_FIRE.
-                status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
-                                        1'b0, 1'b1, 1'b0, 1'b0};
-                cur_event_snap      <= cur_event_next;
-                irq_snap            <= irq_sched | (6'b1 << IRQ_DONE);
-                last_exec_sched_snap <= last_exec_sched;
-                eof_seen_sched_snap <= eof_seen_sched;
-                mode_stream_sched_snap <= mode_stream_sched;
-                status_snap_tgl     <= ~status_snap_tgl;
+                queue_terminal({16'h0, ERR_NONE, 4'h0, 4'b0100},
+                               last_exec_sched,
+                               cur_event_next,
+                               irq_sched | (6'b1 << IRQ_DONE),
+                               eof_seen_sched,
+                               mode_stream_sched);
               end else begin
                 read_ptr     <= read_ptr + 1'b1;
                 engine_state <= ENGINE_WAIT_FETCH;
@@ -1471,27 +1614,12 @@ module awg_timed_ctrl #(
             end
           end
 
-          ENGINE_DONE: begin
-            status_sched_snap   <= {16'h0, ERR_NONE, 12'h0,
-                                    1'b0, 1'b1, 1'b0, 1'b0};
-            cur_event_snap      <= cur_event_next;
-            irq_snap            <= 6'h0;
-            last_exec_sched_snap <= last_exec_sched;
-            eof_seen_sched_snap <= eof_seen_sched;
-            mode_stream_sched_snap <= mode_stream_sched;
-            status_snap_tgl     <= ~status_snap_tgl;
-          end
+          // Terminal states are intentionally quiescent.  Their status and
+          // IRQ were queued exactly once on entry and are held by the mailbox
+          // until acknowledged in the AXI clock domain.
+          ENGINE_DONE:  ;
 
-          ENGINE_ERROR: begin
-            status_sched_snap   <= {16'h0, error_code, 12'h0,
-                                    1'b1, 1'b0, 1'b0, 1'b0};
-            cur_event_snap      <= read_ptr;
-            irq_snap            <= 6'h0;
-            last_exec_sched_snap <= last_exec_sched;
-            eof_seen_sched_snap <= eof_seen_sched;
-            mode_stream_sched_snap <= mode_stream_sched;
-            status_snap_tgl     <= ~status_snap_tgl;
-          end
+          ENGINE_ERROR: ;
 
           default: engine_state <= ENGINE_IDLE;
         endcase

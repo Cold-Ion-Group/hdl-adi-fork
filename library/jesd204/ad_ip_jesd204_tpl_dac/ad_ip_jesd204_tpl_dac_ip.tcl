@@ -52,6 +52,8 @@ adi_ip_files ad_ip_jesd204_tpl_dac [list \
   "../ad_ip_jesd204_tpl_common/up_tpl_common.v" \
   "ad_ip_jesd204_tpl_dac_channel.v" \
   "ad_ip_jesd204_tpl_dac_core.v" \
+  "ad_ip_jesd204_tpl_dac_output_gate.v" \
+  "ad_ip_jesd204_tpl_dac_sched_mux.v" \
   "ad_ip_jesd204_tpl_dac_framer.v" \
   "ad_ip_jesd204_tpl_dac_regmap.v" \
   "ad_ip_jesd204_tpl_dac_pn.v" \
@@ -106,6 +108,13 @@ set_property -dict [list \
   "value_validation_range_maximum" 32 \
   "enablement_tcl_expr" "\$DATAPATH_DISABLE == 0" \
 ] [ipx::get_user_parameters DDS_PHASE_DW -of_objects $cc]
+
+set_property -dict [list \
+  "value_validation_type" "range_long" \
+  "value_validation_range_minimum" 0 \
+  "value_validation_range_maximum" 64 \
+  "enablement_tcl_expr" "\$SCHEDULER_CONTROL_ENABLE == 1" \
+] [ipx::get_user_parameters SCHEDULER_UNMUTE_DELAY -of_objects $cc]
 
 foreach {p v} {
   "NUM_LANES" "1 2 3 4 6 8 12 16 24 32" \
@@ -166,6 +175,8 @@ foreach {k v w} {
   "EXT_SYNC" "Enable external SYNC" "checkBox" \
   "IQCORRECTION_DISABLE" "Disable IQ Correction" "checkBox" \
   "XBAR_ENABLE" "Enable user data XBAR" "checkBox" \
+  "SCHEDULER_CONTROL_ENABLE" "Enable scheduler ownership and final sample gate" "checkBox" \
+  "SCHEDULER_UNMUTE_DELAY" "Scheduler first-sample unmute delay" "text" \
   "DDS_TYPE" "DDS Type" "comboBox" \
   "DDS_CORDIC_DW" "CORDIC DDS Data Width" "text" \
   "DDS_CORDIC_PHASE_DW" "CORDIC DDS Phase Width" "text" \

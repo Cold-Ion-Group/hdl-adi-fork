@@ -41,6 +41,8 @@ module ad_ip_jesd204_tpl_dac #(
   parameter DDS_CORDIC_DW = 16,
   parameter DDS_CORDIC_PHASE_DW = 16,
   parameter DDS_PHASE_DW = 16,
+  parameter SCHEDULER_CONTROL_ENABLE = 0,
+  parameter SCHEDULER_UNMUTE_DELAY = 0,
   parameter DATAPATH_DISABLE = 0,
   parameter IQCORRECTION_DISABLE = 1,
   parameter EXT_SYNC = 0,
@@ -73,6 +75,7 @@ module ad_ip_jesd204_tpl_dac #(
   input [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_init_s,
   input [NUM_CHANNELS*DDS_PHASE_DW-1:0] sched_incr_s,
   input [NUM_CHANNELS-1:0] sched_apply_s,
+  input [NUM_CHANNELS-1:0] sched_output_valid,
   input sched_phase_reinit,
 
   // axi interface
@@ -138,6 +141,14 @@ module ad_ip_jesd204_tpl_dac #(
   wire [NUM_CHANNELS*16-1:0] dac_dds_scale_1_mux_s;
   wire [NUM_CHANNELS*DDS_PHASE_DW-1:0] dac_dds_init_1_mux_s;
   wire [NUM_CHANNELS*DDS_PHASE_DW-1:0] dac_dds_incr_1_mux_s;
+  wire [NUM_CHANNELS-1:0] sched_apply_effective =
+    SCHEDULER_CONTROL_ENABLE ? sched_apply_s : {NUM_CHANNELS{1'b0}};
+  wire [NUM_CHANNELS-1:0] sched_output_valid_effective =
+    SCHEDULER_CONTROL_ENABLE ? sched_output_valid : {NUM_CHANNELS{1'b1}};
+  wire sched_phase_reinit_effective =
+    SCHEDULER_CONTROL_ENABLE ? sched_phase_reinit : 1'b0;
+  localparam SCHEDULER_UNMUTE_DELAY_EFFECTIVE =
+    SCHEDULER_CONTROL_ENABLE ? SCHEDULER_UNMUTE_DELAY : 0;
 
   reg [LINK_DATA_WIDTH-1:0] dac_ddata_cr;
 
@@ -236,6 +247,7 @@ module ad_ip_jesd204_tpl_dac #(
     .DDS_CORDIC_DW (DDS_CORDIC_DW),
     .DDS_CORDIC_PHASE_DW (DDS_CORDIC_PHASE_DW),
     .DDS_PHASE_DW (DDS_PHASE_DW),
+    .OUTPUT_UNMUTE_DELAY (SCHEDULER_UNMUTE_DELAY_EFFECTIVE),
     .EXT_SYNC (EXT_SYNC)
   ) i_core (
     .clk (link_clk),
@@ -255,8 +267,9 @@ module ad_ip_jesd204_tpl_dac #(
     .dac_ext_sync_disarm (dac_ext_sync_disarm),
     .dac_sync_in_status (dac_sync_in_status),
     .dac_sync_in (dac_sync_in),
-    .dac_sync_manual_req (dac_sync_manual_req_in | sched_phase_reinit),
+    .dac_sync_manual_req (dac_sync_manual_req_in | sched_phase_reinit_effective),
     .dac_dds_format (dac_dds_format),
+    .output_valid (sched_output_valid_effective),
 
     .dac_dds_scale_0 (dac_dds_scale_0_mux_s),
     .dac_dds_init_0 (dac_dds_init_0_mux_s),
@@ -275,23 +288,26 @@ module ad_ip_jesd204_tpl_dac #(
 
     .dac_src_chan_sel (dac_src_chan_sel));
 
-  genvar ch;
-  generate
-    for (ch = 0; ch < NUM_CHANNELS; ch = ch + 1) begin : g_sched_dds_mux
-      assign dac_dds_scale_0_mux_s[16*ch +: 16] =
-        sched_apply_s[ch] ? sched_scale_s[16*ch +: 16] : dac_dds_scale_0_s[16*ch +: 16];
-      assign dac_dds_init_0_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
-        sched_apply_s[ch] ? sched_init_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_init_0_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
-      assign dac_dds_incr_0_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
-        sched_apply_s[ch] ? sched_incr_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_incr_0_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
-      assign dac_dds_scale_1_mux_s[16*ch +: 16] =
-        sched_apply_s[ch] ? sched_scale_s[16*ch +: 16] : dac_dds_scale_1_s[16*ch +: 16];
-      assign dac_dds_init_1_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
-        sched_apply_s[ch] ? sched_init_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_init_1_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
-      assign dac_dds_incr_1_mux_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] =
-        sched_apply_s[ch] ? sched_incr_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW] : dac_dds_incr_1_s[DDS_PHASE_DW*ch +: DDS_PHASE_DW];
-    end
-  endgenerate
+  ad_ip_jesd204_tpl_dac_sched_mux #(
+    .NUM_CHANNELS (NUM_CHANNELS),
+    .DDS_PHASE_DW (DDS_PHASE_DW)
+  ) i_sched_mux (
+    .axi_scale_0 (dac_dds_scale_0_s),
+    .axi_init_0 (dac_dds_init_0_s),
+    .axi_incr_0 (dac_dds_incr_0_s),
+    .axi_scale_1 (dac_dds_scale_1_s),
+    .axi_init_1 (dac_dds_init_1_s),
+    .axi_incr_1 (dac_dds_incr_1_s),
+    .sched_scale_sm (sched_scale_s),
+    .sched_init (sched_init_s),
+    .sched_incr (sched_incr_s),
+    .sched_apply (sched_apply_effective),
+    .scale_0 (dac_dds_scale_0_mux_s),
+    .init_0 (dac_dds_init_0_mux_s),
+    .incr_0 (dac_dds_incr_0_mux_s),
+    .scale_1 (dac_dds_scale_1_mux_s),
+    .init_1 (dac_dds_init_1_mux_s),
+    .incr_1 (dac_dds_incr_1_mux_s));
 
   // Drop DMA padding bits from the LSB or MSB based on configuration
   integer i;

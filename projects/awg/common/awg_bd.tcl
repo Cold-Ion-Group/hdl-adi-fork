@@ -81,7 +81,7 @@ adi_axi_jesd204_tx_create axi_ad9144_jesd $NUM_OF_LANES $NUM_LINKS
 #     - axi_ad9144_tpl/dac_enable_<i>, axi_ad9144_tpl/dac_valid_<i>, axi_ad9144_tpl/dac_data_<i>
 #   Extended scheduled-control pins exported at hierarchy boundary:
 #     - sched_scale_s / sched_init_s / sched_incr_s / sched_apply_s
-#     - sched_phase_reinit
+#     - sched_output_valid / sched_phase_reinit
 #   Scheduler epoch anchor input:
 #     - sysref_pulse (from jesd_sysref_sync)
 adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
@@ -93,6 +93,13 @@ adi_tpl_jesd204_tx_create axi_ad9144_tpl $NUM_OF_LANES \
 # The TPL core is wrapped in a hierarchy; the actual IP is at .../dac_tpl_core
 ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.DDS_PHASE_DW 32
 ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.EXT_SYNC 1
+ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.SCHEDULER_CONTROL_ENABLE 1
+# FIRE changes DDS controls at this clock boundary.  Hold the final TPL gate
+# closed for 32 link clocks, covering the 16-stage CORDIC plus scale, sum,
+# formatting, selection, and registered channel-path latency before exposing
+# the first scheduled sample.  A falling valid still mutes combinationally at
+# the final pre-framer boundary; downstream JESD/DAC latency is separate.
+ad_ip_parameter axi_ad9144_tpl/dac_tpl_core CONFIG.SCHEDULER_UNMUTE_DELAY 32
 
 ad_ip_instance util_upack2 axi_ad9144_upack [list \
   NUM_OF_CHANNELS $NUM_OF_CONVERTERS \
@@ -327,6 +334,7 @@ ad_connect awg_timed_ctrl_0/sched_scale_s axi_ad9144_tpl/sched_scale_s
 ad_connect awg_timed_ctrl_0/sched_init_s axi_ad9144_tpl/sched_init_s
 ad_connect awg_timed_ctrl_0/sched_incr_s axi_ad9144_tpl/sched_incr_s
 ad_connect awg_timed_ctrl_0/sched_apply_s axi_ad9144_tpl/sched_apply_s
+ad_connect awg_timed_ctrl_0/sched_output_valid axi_ad9144_tpl/sched_output_valid
 ad_connect awg_timed_ctrl_0/sched_phase_reinit axi_ad9144_tpl/sched_phase_reinit
 ad_connect  util_awg_xcvr/tx_out_clk_0 axi_ad9144_upack/clk
 ad_connect  axi_ad9144_jesd_rstgen/peripheral_reset axi_ad9144_upack/reset

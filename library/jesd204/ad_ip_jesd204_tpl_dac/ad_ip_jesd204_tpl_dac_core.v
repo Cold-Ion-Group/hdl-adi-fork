@@ -39,6 +39,7 @@ module ad_ip_jesd204_tpl_dac_core #(
   parameter DDS_CORDIC_DW = 16,
   parameter DDS_CORDIC_PHASE_DW = 16,
   parameter DDS_PHASE_DW = 16,
+  parameter OUTPUT_UNMUTE_DELAY = 0,
   parameter EXT_SYNC = 0
 ) (
 
@@ -66,6 +67,7 @@ module ad_ip_jesd204_tpl_dac_core #(
   output dac_sync_in_status,
 
   input dac_dds_format,
+  input [NUM_CHANNELS-1:0] output_valid,
 
   input [NUM_CHANNELS*4-1:0] dac_data_sel,
   input [NUM_CHANNELS-1:0]   dac_mask_enable,
@@ -93,6 +95,7 @@ module ad_ip_jesd204_tpl_dac_core #(
   localparam DAC_DATA_WIDTH = DAC_CDW * NUM_CHANNELS;
 
   wire [DAC_DATA_WIDTH-1:0] dac_data_s;
+  wire [DAC_DATA_WIDTH-1:0] dac_data_safe_s;
   wire [DAC_DATA_WIDTH-1:0] dac_ddata_muxed;
 
   wire [DAC_CDW-1:0] pn7_data;
@@ -141,7 +144,22 @@ module ad_ip_jesd204_tpl_dac_core #(
     .DAC_DATA_WIDTH (DAC_DATA_WIDTH)
   ) i_framer (
     .link_data (link_data),
-    .dac_data (dac_data_s));
+    .dac_data (dac_data_safe_s));
+
+  // Last digital safety boundary before JESD framing.  Per-channel gating
+  // prevents an AXI-programmed source on a channel which has not fired yet
+  // from leaking when another scheduled channel becomes active.
+  ad_ip_jesd204_tpl_dac_output_gate #(
+    .NUM_CHANNELS (NUM_CHANNELS),
+    .SAMPLES_PER_CHANNEL (DATA_PATH_WIDTH),
+    .SAMPLE_WIDTH (CONVERTER_RESOLUTION),
+    .UNMUTE_DELAY_CYCLES (OUTPUT_UNMUTE_DELAY)
+  ) i_output_gate (
+    .clk (clk),
+    .output_valid (output_valid),
+    .offset_binary (dac_dds_format),
+    .data_in (dac_data_s),
+    .data_out (dac_data_safe_s));
 
   // PN generator
   ad_ip_jesd204_tpl_dac_pn #(

@@ -247,6 +247,7 @@ proc adi_tpl_jesd204_tx_create {ip_name num_of_lanes num_of_converters samples_p
     create_bd_pin -dir I -from [expr $num_of_converters * $dds_phase_dw - 1] -to 0 "${ip_name}/sched_init_s"
     create_bd_pin -dir I -from [expr $num_of_converters * $dds_phase_dw - 1] -to 0 "${ip_name}/sched_incr_s"
     create_bd_pin -dir I -from [expr $num_of_converters - 1] -to 0 "${ip_name}/sched_apply_s"
+    create_bd_pin -dir I -from [expr $num_of_converters - 1] -to 0 "${ip_name}/sched_output_valid"
     create_bd_pin -dir I "${ip_name}/sched_phase_reinit"
 
     # Interface to application layer
@@ -309,6 +310,7 @@ proc adi_tpl_jesd204_tx_create {ip_name num_of_lanes num_of_converters samples_p
     ad_connect ${ip_name}/sched_init_s ${ip_name}/dac_tpl_core/sched_init_s
     ad_connect ${ip_name}/sched_incr_s ${ip_name}/dac_tpl_core/sched_incr_s
     ad_connect ${ip_name}/sched_apply_s ${ip_name}/dac_tpl_core/sched_apply_s
+    ad_connect ${ip_name}/sched_output_valid ${ip_name}/dac_tpl_core/sched_output_valid
     ad_connect ${ip_name}/sched_phase_reinit ${ip_name}/dac_tpl_core/sched_phase_reinit
 
     # TPL - app layer

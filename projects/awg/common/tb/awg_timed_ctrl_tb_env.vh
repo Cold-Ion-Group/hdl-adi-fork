@@ -60,7 +60,11 @@
 
   reg         sched_clk = 1'b0;
   reg         sched_reset = 1'b1;
+`ifdef TB_EXTERNAL_SYSREF_PULSE
+  wire        sysref_pulse;
+`else
   reg         sysref_pulse = 1'b0;
+`endif
   reg         extension_error_in = 1'b0;
   reg         extension_error_toggle_in = 1'b0;
   reg [255:0] dma_s_axis_tdata = 256'h0;
@@ -79,6 +83,7 @@
   wire [255:0] sched_incr_s;
   wire [7:0]  sched_apply_s;
   wire        sched_phase_reinit;
+  wire [7:0]  sched_output_valid;
   wire        irq;
 
   integer failures = 0;
@@ -131,11 +136,24 @@
     .sched_incr_s(sched_incr_s),
     .sched_apply_s(sched_apply_s),
     .sched_phase_reinit(sched_phase_reinit),
+    .sched_output_valid(sched_output_valid),
     .irq(irq)
   );
 
-  always #5 s_axi_aclk = ~s_axi_aclk;
-  always #4 sched_clk = ~sched_clk;
+`ifndef AXI_HALF_PERIOD
+`define AXI_HALF_PERIOD 5
+`endif
+`ifndef SCHED_HALF_PERIOD
+`define SCHED_HALF_PERIOD 4
+`endif
+`ifndef SCHED_PHASE_OFFSET
+`define SCHED_PHASE_OFFSET 0
+`endif
+  always #`AXI_HALF_PERIOD s_axi_aclk = ~s_axi_aclk;
+  initial begin
+    #`SCHED_PHASE_OFFSET;
+    forever #`SCHED_HALF_PERIOD sched_clk = ~sched_clk;
+  end
 
   initial begin
     $dumpfile(VCD_FILE);
@@ -361,7 +379,7 @@
   endtask
 
   task automatic set_stream_mode;
-    input bit enable;
+    input enable;
     begin
       axi_write(REG_STREAM_CTRL, enable ? 32'h1 : 32'h0, 4'b0001);
     end
